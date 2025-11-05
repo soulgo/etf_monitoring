@@ -4,6 +4,8 @@ Settings dialog for managing ETF list and configuration parameters.
 Provides user-friendly interface for all configuration options.
 """
 
+from typing import Dict
+
 import wx
 
 from ..config.manager import ConfigManager
@@ -44,6 +46,7 @@ class SettingsDialog(wx.Dialog):
         self._config = config_manager
         self._fetch_name_callback = fetch_name_callback
         self._logger = get_logger(__name__)
+        self._etf_name_cache: Dict[str, str] = {}
         
         # Create UI
         self._create_ui()
@@ -78,7 +81,7 @@ class SettingsDialog(wx.Dialog):
         # Add/Delete buttons
         btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
         
-        self._code_input = wx.TextCtrl(panel, size=(100, -1))
+        self._code_input = wx.TextCtrl(panel, size=(140, -1))
         self._code_input.SetHint("输入代码")
         btn_sizer.Add(self._code_input, 0, wx.ALL, 2)
         
@@ -96,7 +99,7 @@ class SettingsDialog(wx.Dialog):
         
         etf_sizer.Add(btn_sizer, 0, wx.ALL, 5)
         
-        main_sizer.Add(etf_sizer, 1, wx.EXPAND | wx.ALL, 10)
+        main_sizer.Add(etf_sizer, 2, wx.EXPAND | wx.ALL, 10)
         
         # Refresh Settings Section
         refresh_box = wx.StaticBox(panel, label="刷新设置")
@@ -168,14 +171,30 @@ class SettingsDialog(wx.Dialog):
         
         panel.SetSizer(main_sizer)
     
+    def _get_etf_display_name(self, code: str) -> str:
+        """Return display name for ETF code, with optional API lookup."""
+        if code in self._etf_name_cache:
+            return self._etf_name_cache[code]
+
+        name = f"ETF{code}"
+        if self._fetch_name_callback:
+            try:
+                fetched_name = self._fetch_name_callback(code)
+                if fetched_name:
+                    name = fetched_name
+            except Exception as e:
+                self._logger.warning(f"Failed to fetch name for {code}: {e}")
+
+        self._etf_name_cache[code] = name
+        return name
+
     def _load_settings(self) -> None:
         """Load current settings from configuration."""
         # Load ETF list
         etf_list = self._config.get('etf_list', [])
         for code in etf_list:
             index = self._etf_list.InsertItem(self._etf_list.GetItemCount(), code)
-            # Try to get name from cache or set placeholder
-            self._etf_list.SetItem(index, 1, f"ETF{code}")
+            self._etf_list.SetItem(index, 1, self._get_etf_display_name(code))
             self._etf_list.SetItem(index, 2, "")
         
         # Load refresh interval
@@ -219,14 +238,7 @@ class SettingsDialog(wx.Dialog):
                 return
         
         # Fetch name from API if callback provided
-        name = f"ETF{code}"
-        if self._fetch_name_callback:
-            try:
-                fetched_name = self._fetch_name_callback(code)
-                if fetched_name:
-                    name = fetched_name
-            except Exception as e:
-                self._logger.warning(f"Failed to fetch name for {code}: {e}")
+        name = self._get_etf_display_name(code)
         
         # Add to list
         index = self._etf_list.InsertItem(self._etf_list.GetItemCount(), code)

@@ -344,7 +344,7 @@ class ETFMonitorApp(wx.App):
     
     def _fetch_etf_name(self, code: str) -> str:
         """
-        Fetch ETF name from API.
+        Fetch ETF name from cache or API.
         
         Args:
             code: ETF code
@@ -352,9 +352,15 @@ class ETFMonitorApp(wx.App):
         Returns:
             ETF name or default
         """
+        # First try to get from cache
+        cached_quote = self.cache_manager.get(code)
+        if cached_quote and cached_quote.name:
+            return cached_quote.name
+        
+        # If not in cache, fetch from API
         try:
             quote = self.primary_adapter.fetch_quote(code)
-            if quote:
+            if quote and quote.name:
                 return quote.name
         except Exception as e:
             self.logger.warning(f"Failed to fetch name for {code}: {e}")
