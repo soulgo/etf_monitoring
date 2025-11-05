@@ -1,0 +1,15 @@
+# ETF Monitor - Python Dependencies
+# Core dependencies for the ETF monitoring desktop application
+
+# UI Framework - Native Windows appearance with moderate resource usage
+wxPython>=4.2.0
+
+# HTTP Client - Modern async/sync support with connection pooling
+httpx>=0.24.0
+
+# No additional dependencies needed - using Python standard library for:
+# - threading: Multi-threaded data fetching and rotation control
+# - logging: Rotating file handler with level-based filtering
+# - json: Configuration file management
+# - dataclasses: Type-safe data models
+

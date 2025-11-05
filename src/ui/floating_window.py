@@ -1,0 +1,730 @@
+"""
+右下角悬浮窗，在屏幕右下角显示 ETF 信息。
+
+提供类似时钟的显示效果，固定在任务栏时钟上方。
+"""
+
+import wx
+from typing import Dict, Optional, Tuple
+from ..data.models import ETFQuote
+from ..utils.logger import get_logger
+from ..utils.helpers import format_percent_with_arrow
+
+
+class FloatingWindow(wx.Frame):
+    """
+    右下角悬浮窗，显示 ETF 轮播信息。
+    
+    特性：
+    - 固定在屏幕右下角（时钟上方）
+    - 大号清晰文字
+    - 无边框、半透明
+    - 始终置顶
+    - 自动轮播
+    """
+    
+    def __init__(
+        self,
+        parent=None,
+        position=None,  # 忽略，自动计算右下角位置
+        window_size: Optional[Tuple[int, int]] = None,
+        font_size=18,
+        transparency=200,
+        rotation_interval=3
+    ):
+        """
+        初始化悬浮窗。
+        
+        Args:
+            parent: 父窗口
+            position: 位置参数（忽略，自动定位）
+            font_size: 字体大小
+            transparency: 透明度 (0-255, 255为不透明)
+            rotation_interval: 轮播间隔（秒）
+        """
+        # 创建无边框、置顶的窗口
+        style = (
+            wx.FRAME_NO_TASKBAR |
+            wx.STAY_ON_TOP |
+            wx.NO_BORDER
+        )
+        
+        # 尺寸与缩放配置
+        self._base_default_size = (350, 60)
+        self._min_width = 1
+        self._min_height = 1
+        initial_width, initial_height = self._base_default_size
+        if window_size and isinstance(window_size, (list, tuple)) and len(window_size) == 2:
+            initial_width = max(int(window_size[0]), self._min_width)
+            initial_height = max(int(window_size[1]), self._min_height)
+        self._window_width = initial_width
+        self._window_height = initial_height
+        
+        super().__init__(
+            parent,
+            title="ETF Monitor",
+            size=(self._window_width, self._window_height),
+            style=style
+        )
+        self.SetMinSize((self._min_width, self._min_height))
+        
+        self._logger = get_logger(__name__)
+        self._font_size = font_size
+        self._transparency = transparency
+        self._rotation_interval = rotation_interval
+        
+        # 数据
+        self._etf_data: Dict[str, ETFQuote] = {}
+        self._etf_codes: list = []
+        self._current_index = 0
+        
+        # 拖动相关
+        self._dragging = False
+        self._drag_start_pos = None
+        self._window_start_pos = None
+        self._resizing = False
+        self._resize_direction = ''  # 调整方向：N, S, E, W, NE, NW, SE, SW
+        self._resize_start_pos = None
+        self._window_start_size = None
+        self._window_start_pos_for_resize = None  # 调整大小时的起始位置
+        self._resize_margin = 12
+        self._cursor_cache: Dict[int, wx.Cursor] = {}
+        self._text_sizer_item = None
+        self._current_padding = 10
+
+        # 创建UI
+        self._create_ui()
+        
+        # 设置透明度
+        self.SetTransparent(self._transparency)
+        
+        # 自动定位到右下角
+        self._position_bottom_right()
+        
+        # 绑定事件
+        self._bind_events()
+        
+        # 轮播定时器
+        self._rotation_timer = wx.Timer(self)
+        self.Bind(wx.EVT_TIMER, self._on_rotation_timer, self._rotation_timer)
+        
+        # 数据加载超时检测定时器（10秒）
+        self._timeout_timer = wx.Timer(self)
+        self.Bind(wx.EVT_TIMER, self._on_timeout_check, self._timeout_timer)
+        self._timeout_timer.Start(10000, wx.TIMER_ONE_SHOT)  # 10秒后触发一次
+        self._data_loaded = False
+        
+        # 立即刷新显示，确保初始状态可见
+        self._update_display()
+        
+        self._logger.info("Floating window initialized at bottom-right corner")
+    
+    def _create_ui(self):
+        """创建UI界面。"""
+        # 创建面板，添加边框样式
+        self._panel = wx.Panel(self, style=wx.BORDER_SIMPLE)
+        
+        # 创建文本控件（移除NO_AUTORESIZE，允许文本自适应）
+        self._text = wx.StaticText(
+            self._panel,
+            label="正在加载 ETF 数据...",
+            style=wx.ALIGN_CENTER | wx.ALIGN_CENTER_VERTICAL
+        )
+        
+        # 根据窗口高度计算初始字体大小
+        self._font_size = self._calculate_font_size(self._window_height)
+        
+        # 设置字体
+        font = wx.Font(
+            self._font_size,
+            wx.FONTFAMILY_DEFAULT,
+            wx.FONTSTYLE_NORMAL,
+            wx.FONTWEIGHT_BOLD
+        )
+        self._text.SetFont(font)
+        
+        # 布局（增加内边距，确保文字不贴边）
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        sizer.Add(self._text, 1, wx.EXPAND | wx.ALL, 10)
+        self._text_sizer_item = sizer.GetItem(self._text)
+        self._panel.SetSizer(sizer)
+        
+        # 默认背景色（更明显的浅蓝色）
+        self._panel.SetBackgroundColour(wx.Colour(240, 248, 255))
+        self._text.SetForegroundColour(wx.Colour(0, 0, 0))
+
+        # 面板填满整个窗口
+        self._panel.SetMinSize((self._min_width, self._min_height))
+        frame_sizer = wx.BoxSizer(wx.VERTICAL)
+        frame_sizer.Add(self._panel, 1, wx.EXPAND)
+        self.SetSizer(frame_sizer)
+        self.Layout()
+        self._sync_window_size()
+    
+    def _get_client_position(self, event) -> wx.Point:
+        """获取事件相对于窗口客户区的位置。"""
+        obj = event.GetEventObject()
+        if isinstance(obj, wx.Window):
+            screen_pos = obj.ClientToScreen(event.GetPosition())
+            return self.ScreenToClient(screen_pos)
+        return event.GetPosition()
+
+    def _get_screen_position(self, event) -> wx.Point:
+        """获取事件的屏幕坐标。"""
+        obj = event.GetEventObject()
+        if isinstance(obj, wx.Window):
+            return obj.ClientToScreen(event.GetPosition())
+        return self.ClientToScreen(event.GetPosition())
+
+    def _get_resize_direction(self, client_pos: wx.Point) -> str:
+        """
+        判断鼠标位置对应的调整方向。
+        
+        Returns:
+            方向字符串: 'N', 'S', 'E', 'W', 'NE', 'NW', 'SE', 'SW', 或空字符串
+        """
+        client_width, client_height = self.GetClientSize()
+        x, y = client_pos.x, client_pos.y
+        margin = self._resize_margin
+        
+        # 判断是否在边缘区域
+        at_left = x <= margin
+        at_right = x >= client_width - margin
+        at_top = y <= margin
+        at_bottom = y >= client_height - margin
+        
+        # 角优先（同时在两个边缘）
+        if at_top and at_left:
+            return 'NW'
+        elif at_top and at_right:
+            return 'NE'
+        elif at_bottom and at_left:
+            return 'SW'
+        elif at_bottom and at_right:
+            return 'SE'
+        # 边
+        elif at_top:
+            return 'N'
+        elif at_bottom:
+            return 'S'
+        elif at_left:
+            return 'W'
+        elif at_right:
+            return 'E'
+        
+        return ''
+    
+    def _get_cursor_type_for_direction(self, direction: str) -> int:
+        """根据调整方向获取对应的鼠标光标类型。"""
+        cursor_map = {
+            'N': wx.CURSOR_SIZENS,
+            'S': wx.CURSOR_SIZENS,
+            'E': wx.CURSOR_SIZEWE,
+            'W': wx.CURSOR_SIZEWE,
+            'NE': wx.CURSOR_SIZENESW,
+            'SW': wx.CURSOR_SIZENESW,
+            'NW': wx.CURSOR_SIZENWSE,
+            'SE': wx.CURSOR_SIZENWSE,
+        }
+        return cursor_map.get(direction, wx.CURSOR_ARROW)
+
+    def _set_cursor(self, cursor_type: int) -> None:
+        """同步设置窗口及子控件的鼠标光标。"""
+        cursor = self._cursor_cache.get(cursor_type)
+        if cursor is None:
+            cursor = wx.Cursor(cursor_type)
+            self._cursor_cache[cursor_type] = cursor
+        for target in (self, getattr(self, '_panel', None), getattr(self, '_text', None)):
+            if isinstance(target, wx.Window):
+                target.SetCursor(cursor)
+
+    def _set_cursor_for_direction(self, direction: str) -> None:
+        cursor_type = self._get_cursor_type_for_direction(direction)
+        self._set_cursor(cursor_type)
+
+    def _calculate_font_size(self, window_height: int) -> int:
+        """
+        根据窗口高度计算合适的字体大小。
+        
+        Args:
+            window_height: 窗口高度
+            
+        Returns:
+            计算出的字体大小（10-32之间）
+        """
+        # 字体大小约为窗口高度的45%
+        font_size = int(max(window_height, 1) * 0.45)
+        # 限制在4-32之间
+        return max(4, min(32, font_size))
+    
+    def _update_font_size(self) -> None:
+        """根据当前窗口大小更新字体。"""
+        new_font_size = self._calculate_font_size(self._window_height)
+        if new_font_size != self._font_size:
+            self._font_size = new_font_size
+            font = wx.Font(
+                self._font_size,
+                wx.FONTFAMILY_DEFAULT,
+                wx.FONTSTYLE_NORMAL,
+                wx.FONTWEIGHT_BOLD
+            )
+            self._text.SetFont(font)
+
+    def _update_layout_metrics(self) -> None:
+        """根据窗口尺寸调整内边距等布局参数。"""
+        padding = max(2, min(10, int(max(self._window_height, 1) * 0.15)))
+        self._current_padding = padding
+        if self._text_sizer_item:
+            self._text_sizer_item.SetBorder(padding)
+        panel_sizer = self._panel.GetSizer()
+        if panel_sizer:
+            panel_sizer.Layout()
+
+    def _ensure_text_fits(self) -> None:
+        """确保文本在当前窗口尺寸下完整显示。"""
+        if not hasattr(self, '_text') or not self._text:
+            return
+        label = self._text.GetLabel()
+        if not label:
+            return
+        panel_size = self._panel.GetClientSize()
+        available_width = max(1, panel_size.GetWidth() - self._current_padding * 2)
+        available_height = max(1, panel_size.GetHeight() - self._current_padding * 2)
+        # 使用当前字体作为起点
+        font_size = max(1, int(self._font_size))
+        font = self._text.GetFont()
+        dc = wx.ClientDC(self._text)
+        dc.SetFont(font)
+        text_width, text_height = dc.GetTextExtent(label)
+        font_changed = False
+        while (text_width > available_width or text_height > available_height) and font_size > 1:
+            font_size -= 1
+            font_changed = True
+            font = wx.Font(
+                font_size,
+                wx.FONTFAMILY_DEFAULT,
+                wx.FONTSTYLE_NORMAL,
+                wx.FONTWEIGHT_BOLD
+            )
+            self._text.SetFont(font)
+            dc.SetFont(font)
+            text_width, text_height = dc.GetTextExtent(label)
+        if font_changed or font_size != self._font_size:
+            self._font_size = font_size
+            sizer = self._panel.GetSizer()
+            if sizer:
+                sizer.Layout()
+    
+    def _apply_size(self, width: int, height: int, reposition: bool = False) -> None:
+        """应用窗口尺寸并刷新布局。"""
+        width = max(self._min_width, int(width))
+        height = max(self._min_height, int(height))
+        self.SetSize((width, height))
+        self._sync_window_size()
+        # 更新字体大小
+        self._update_font_size()
+        self._update_layout_metrics()
+        self._ensure_text_fits()
+        self.Layout()
+        if reposition:
+            self._position_bottom_right()
+
+    def _sync_window_size(self) -> None:
+        """同步内部记录的窗口尺寸。"""
+        size = self.GetSize()
+        self._window_width = size.GetWidth()
+        self._window_height = size.GetHeight()
+
+    def _reset_size(self) -> None:
+        """重置为默认尺寸并重新定位。"""
+        target_width, target_height = self._base_default_size
+        self._apply_size(target_width, target_height, reposition=True)
+
+    def _position_bottom_right(self):
+        """自动定位到屏幕右下角。"""
+        try:
+            self._sync_window_size()
+            # 获取主显示器
+            display = wx.Display(0)
+            
+            # 获取工作区域（排除任务栏）
+            client_area = display.GetClientArea()
+            
+            # 计算右下角位置（留 10px 边距）
+            margin = 10
+            current_size = self.GetSize()
+            width = current_size.GetWidth()
+            height = current_size.GetHeight()
+            x = client_area.GetRight() - width - margin
+            y = client_area.GetBottom() - height - margin
+            
+            self.SetPosition((x, y))
+            self._logger.info(f"Window positioned at ({x}, {y})")
+            
+        except Exception as e:
+            self._logger.error(f"Failed to position window: {e}")
+            # 出错则使用默认位置
+            self.SetPosition((100, 100))
+    
+    def _bind_events(self):
+        """绑定事件。"""
+        # 鼠标拖动/缩放事件绑定到窗口及子控件
+        for widget in (self, self._panel, self._text):
+            widget.Bind(wx.EVT_LEFT_DOWN, self._on_left_down)
+            widget.Bind(wx.EVT_LEFT_UP, self._on_left_up)
+            widget.Bind(wx.EVT_MOTION, self._on_mouse_move)
+            widget.Bind(wx.EVT_LEAVE_WINDOW, self._on_mouse_leave)
+
+        # 鼠标捕获丢失
+        self.Bind(wx.EVT_MOUSE_CAPTURE_LOST, self._on_capture_lost)
+        self._panel.Bind(wx.EVT_MOUSE_CAPTURE_LOST, self._on_capture_lost)
+        self._text.Bind(wx.EVT_MOUSE_CAPTURE_LOST, self._on_capture_lost)
+        
+        # 右键菜单
+        self._panel.Bind(wx.EVT_RIGHT_DOWN, self._on_right_click)
+        self._text.Bind(wx.EVT_RIGHT_DOWN, self._on_right_click)
+        
+        # 双击隐藏
+        self._panel.Bind(wx.EVT_LEFT_DCLICK, self._on_double_click)
+        self._text.Bind(wx.EVT_LEFT_DCLICK, self._on_double_click)
+    
+    def update_data(self, etf_data: Dict[str, ETFQuote]):
+        """
+        更新 ETF 数据。
+        
+        Args:
+            etf_data: ETF 数据字典
+        """
+        self._etf_data = etf_data.copy()
+        self._etf_codes = list(etf_data.keys())
+        
+        # 标记数据已加载
+        if not self._data_loaded and etf_data:
+            self._data_loaded = True
+            self._timeout_timer.Stop()  # 停止超时检测
+            self._logger.info(f"Floating window data loaded successfully: {len(self._etf_codes)} ETFs")
+        
+        self._logger.debug(f"Floating window data updated: {len(self._etf_codes)} ETFs")
+        
+        # 更新显示
+        self._update_display()
+    
+    def start_rotation(self):
+        """开始轮播。"""
+        if not self._rotation_timer.IsRunning():
+            self._rotation_timer.Start(self._rotation_interval * 1000)
+            self._logger.info(f"Rotation started: {self._rotation_interval}s interval")
+    
+    def stop_rotation(self):
+        """停止轮播。"""
+        if self._rotation_timer.IsRunning():
+            self._rotation_timer.Stop()
+            self._logger.info("Rotation stopped")
+    
+    def _on_rotation_timer(self, event):
+        """轮播定时器触发。"""
+        if self._etf_codes:
+            self._current_index = (self._current_index + 1) % len(self._etf_codes)
+            self._update_display()
+    
+    def _on_timeout_check(self, event):
+        """数据加载超时检查。"""
+        if not self._data_loaded:
+            self._logger.warning("Data loading timeout - no data received after 10 seconds")
+            self._text.SetLabel("数据加载超时\n请检查网络连接")
+            self._panel.SetBackgroundColour(wx.Colour(255, 200, 150))  # 橙色
+            self._text.SetForegroundColour(wx.Colour(139, 0, 0))  # 深红
+            self._panel.Refresh()
+    
+    def _update_display(self):
+        """更新显示内容。"""
+        if not self._etf_codes or not self._etf_data:
+            # 显示更明显的加载提示
+            self._text.SetLabel("正在获取数据...")
+            self._panel.SetBackgroundColour(wx.Colour(255, 250, 205))  # 浅黄色
+            self._text.SetForegroundColour(wx.Colour(0, 0, 0))
+            self._panel.Refresh()
+            self._logger.debug("No data available yet")
+            return
+        
+        # 确保索引有效
+        if self._current_index >= len(self._etf_codes):
+            self._current_index = 0
+        
+        code = self._etf_codes[self._current_index]
+        quote = self._etf_data.get(code)
+        
+        if not quote:
+            # 数据项不存在，显示错误提示
+            self._text.SetLabel(f"数据错误: {code}")
+            self._panel.SetBackgroundColour(wx.Colour(255, 230, 230))
+            self._text.SetForegroundColour(wx.Colour(180, 0, 0))
+            self._panel.Refresh()
+            self._logger.warning(f"Quote data not found for {code}")
+            return
+        
+        try:
+            # 格式化显示文字
+            change_text = format_percent_with_arrow(quote.change_percent)
+            display_text = f"{quote.name} {quote.price:.3f} {change_text}"
+            
+            # 设置文字
+            self._text.SetLabel(display_text)
+            self._ensure_text_fits()
+            
+            # 根据涨跌设置颜色（更鲜明的颜色）
+            if quote.change_percent > 0:
+                # 上涨 - 鲜艳的红色背景
+                self._panel.SetBackgroundColour(wx.Colour(255, 200, 200))
+                self._text.SetForegroundColour(wx.Colour(180, 0, 0))
+            elif quote.change_percent < 0:
+                # 下跌 - 鲜艳的绿色背景
+                self._panel.SetBackgroundColour(wx.Colour(200, 255, 200))
+                self._text.SetForegroundColour(wx.Colour(0, 100, 0))
+            else:
+                # 平盘 - 白色背景，黑色文字
+                self._panel.SetBackgroundColour(wx.Colour(255, 255, 255))
+                self._text.SetForegroundColour(wx.Colour(0, 0, 0))
+            
+            # 强制刷新显示
+            self._panel.Refresh()
+            self._panel.Update()
+            self._logger.debug(f"Display updated: {display_text}")
+            
+        except Exception as e:
+            self._logger.error(f"Error updating display: {e}", exc_info=True)
+            self._text.SetLabel("显示错误")
+            self._panel.SetBackgroundColour(wx.Colour(255, 230, 230))
+            self._text.SetForegroundColour(wx.Colour(180, 0, 0))
+            self._panel.Refresh()
+    
+    def _on_left_down(self, event):
+        """鼠标左键按下 - 开始拖动或缩放。"""
+        client_pos = self._get_client_position(event)
+        screen_pos = self._get_screen_position(event)
+        direction = self._get_resize_direction(client_pos)
+        
+        if direction:
+            # 开始调整大小
+            self._resizing = True
+            self._resize_direction = direction
+            self._resize_start_pos = screen_pos
+            self._window_start_size = self.GetSize()
+            self._window_start_pos_for_resize = self.GetPosition()
+            self._set_cursor_for_direction(direction)
+        else:
+            # 开始拖动
+            self._dragging = True
+            self._drag_start_pos = screen_pos
+            self._window_start_pos = self.GetPosition()
+            self._set_cursor(wx.CURSOR_HAND)
+        
+        if not self.HasCapture():
+            self.CaptureMouse()
+        event.Skip()
+    
+    def _on_left_up(self, event):
+        """鼠标左键释放 - 结束拖动/缩放。"""
+        if self._dragging or self._resizing:
+            self._dragging = False
+            self._resizing = False
+            self._resize_direction = ''
+            self._resize_start_pos = None
+            self._window_start_size = None
+            self._window_start_pos_for_resize = None
+            self._set_cursor(wx.CURSOR_ARROW)
+            if self.HasCapture():
+                self.ReleaseMouse()
+        event.Skip()
+    
+    def _on_mouse_move(self, event):
+        """鼠标移动 - 拖动或缩放窗口。"""
+        client_pos = self._get_client_position(event)
+        
+        if self._resizing and self._window_start_size:
+            # 调整大小模式
+            current_screen_pos = self._get_screen_position(event)
+            delta_x = current_screen_pos.x - self._resize_start_pos.x
+            delta_y = current_screen_pos.y - self._resize_start_pos.y
+            
+            # 获取起始尺寸和位置
+            start_width = self._window_start_size.GetWidth()
+            start_height = self._window_start_size.GetHeight()
+            if self._window_start_pos_for_resize is None:
+                self._window_start_pos_for_resize = self.GetPosition()
+            start_x = self._window_start_pos_for_resize.x
+            start_y = self._window_start_pos_for_resize.y
+            
+            new_width = start_width
+            new_height = start_height
+            new_x = start_x
+            new_y = start_y
+            
+            # 根据方向计算新尺寸和位置
+            direction = self._resize_direction
+            if not direction:
+                direction = self._get_resize_direction(client_pos)
+            
+            # 水平方向
+            if 'E' in direction:
+                new_width = start_width + delta_x
+            elif 'W' in direction:
+                new_width = start_width - delta_x
+                new_x = start_x + delta_x
+            
+            # 垂直方向
+            if 'S' in direction:
+                new_height = start_height + delta_y
+            elif 'N' in direction:
+                new_height = start_height - delta_y
+                new_y = start_y + delta_y
+            
+            # 应用最小尺寸限制
+            new_width = max(self._min_width, int(new_width))
+            new_height = max(self._min_height, int(new_height))
+            
+            # 如果从左边或上边调整，需要调整位置以保持对侧不动
+            if 'W' in direction:
+                new_x = start_x + (start_width - new_width)
+            if 'N' in direction:
+                new_y = start_y + (start_height - new_height)
+            
+            # 应用新尺寸和位置
+            self._set_cursor_for_direction(direction)
+            self.SetPosition((int(new_x), int(new_y)))
+            self._apply_size(new_width, new_height)
+            
+        elif self._dragging:
+            # 拖动模式
+            current_screen_pos = self._get_screen_position(event)
+            delta_x = current_screen_pos.x - self._drag_start_pos.x
+            delta_y = current_screen_pos.y - self._drag_start_pos.y
+            new_x = self._window_start_pos.x + delta_x
+            new_y = self._window_start_pos.y + delta_y
+            self.Move(new_x, new_y)
+        else:
+            # 更新光标
+            direction = self._get_resize_direction(client_pos)
+            if direction:
+                self._set_cursor_for_direction(direction)
+            elif not self._dragging:
+                self._set_cursor(wx.CURSOR_ARROW)
+        
+        event.Skip()
+
+    def _on_mouse_leave(self, event):
+        """鼠标离开窗口区域。"""
+        if not self._dragging and not self._resizing:
+            self._set_cursor(wx.CURSOR_ARROW)
+        event.Skip()
+
+    def _on_capture_lost(self, event):
+        """鼠标捕获丢失时重置状态。"""
+        self._logger.debug("Mouse capture lost")
+        self._dragging = False
+        self._resizing = False
+        self._resize_direction = ''
+        self._resize_start_pos = None
+        self._window_start_size = None
+        self._window_start_pos_for_resize = None
+        if self.HasCapture():
+            try:
+                self.ReleaseMouse()
+            except Exception:
+                pass
+        self._set_cursor(wx.CURSOR_ARROW)
+        event.Skip()
+    
+    def _on_double_click(self, event):
+        """双击隐藏窗口。"""
+        self.Hide()
+        self._logger.info("Floating window hidden by double-click")
+    
+    def _on_right_click(self, event):
+        """右键菜单。"""
+        menu = wx.Menu()
+        
+        # 重置到右下角
+        reset_item = menu.Append(wx.ID_ANY, "重置到右下角")
+        menu.Bind(wx.EVT_MENU, lambda e: self._position_bottom_right(), reset_item)
+        # 重置尺寸
+        reset_size_item = menu.Append(wx.ID_ANY, "重置尺寸")
+        menu.Bind(wx.EVT_MENU, lambda e: self._reset_size(), reset_size_item)
+        
+        menu.AppendSeparator()
+        
+        # 透明度
+        transparency_menu = wx.Menu()
+        for value, label in [(255, "不透明"), (230, "轻微透明"), (200, "半透明"), (150, "透明")]:
+            item = transparency_menu.Append(wx.ID_ANY, label)
+            menu.Bind(wx.EVT_MENU, lambda e, v=value: self._set_transparency(v), item)
+        menu.AppendSubMenu(transparency_menu, "透明度")
+        
+        menu.AppendSeparator()
+        
+        # 隐藏
+        hide_item = menu.Append(wx.ID_ANY, "隐藏悬浮窗")
+        menu.Bind(wx.EVT_MENU, lambda e: self.Hide(), hide_item)
+        
+        # 显示菜单
+        self._panel.PopupMenu(menu)
+        menu.Destroy()
+    
+    def _set_transparency(self, value):
+        """设置透明度。"""
+        self._transparency = value
+        self.SetTransparent(value)
+        self._logger.info(f"Transparency set to {value}")
+    
+    def update_settings(self, font_size=None, transparency=None, rotation_interval=None):
+        """
+        更新设置。
+        
+        Args:
+            font_size: 字体大小
+            transparency: 透明度
+            rotation_interval: 轮播间隔
+        """
+        if font_size is not None and font_size != self._font_size:
+            self._font_size = font_size
+            font = wx.Font(
+                font_size,
+                wx.FONTFAMILY_DEFAULT,
+                wx.FONTSTYLE_NORMAL,
+                wx.FONTWEIGHT_BOLD
+            )
+            self._text.SetFont(font)
+            self._panel.Layout()
+            self._ensure_text_fits()
+        
+        if transparency is not None:
+            self._set_transparency(transparency)
+        
+        if rotation_interval is not None and rotation_interval != self._rotation_interval:
+            self._rotation_interval = rotation_interval
+            if self._rotation_timer.IsRunning():
+                self.stop_rotation()
+                self.start_rotation()
+    
+    def get_position_config(self):
+        """
+        获取当前位置配置。
+        
+        Returns:
+            位置元组 (x, y)
+        """
+        pos = self.GetPosition()
+        return (pos.x, pos.y)
+    
+    def get_size_config(self) -> Tuple[int, int]:
+        """获取当前尺寸配置。"""
+        self._sync_window_size()
+        return (self._window_width, self._window_height)
+    
+    def cleanup(self):
+        """清理资源。"""
+        self.stop_rotation()
+        if self._timeout_timer.IsRunning():
+            self._timeout_timer.Stop()
+        if self.HasCapture():
+            self.ReleaseMouse()

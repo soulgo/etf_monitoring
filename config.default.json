@@ -1,0 +1,61 @@
+{
+  "config_version": "1.0",
+  "etf_list": [
+    "512170",
+    "515790",
+    "512690"
+  ],
+  "refresh_interval": 5,
+  "rotation_interval": 3,
+  "rotation_mode": "both",
+  "api_config": {
+    "primary": {
+      "name": "eastmoney",
+      "base_url": "http://push2.eastmoney.com/api/qt/stock/get",
+      "timeout": 5,
+      "enabled": true
+    },
+    "backup": [
+      {
+        "name": "tencent",
+        "base_url": "http://qt.gtimg.cn/q=",
+        "timeout": 5,
+        "enabled": true
+      }
+    ],
+    "retry_count": 3,
+    "retry_interval": 1,
+    "failover_threshold": 3
+  },
+  "display_config": {
+    "tooltip_format": "{name} ({code})\n最新价: {price} ({change_percent})\n更新: {time}",
+    "show_update_time": true,
+    "color_up": "green",
+    "color_down": "red",
+    "color_neutral": "gray"
+  },
+  "alert_threshold": {
+    "enabled": false,
+    "up_threshold": 3.0,
+    "down_threshold": -3.0,
+    "notification_type": "toast",
+    "sound_enabled": false
+  },
+  "auto_start": false,
+  "log_level": "INFO",
+  "floating_window": {
+    "enabled": true,
+    "position": [100, 100],
+    "size": [350, 60],
+    "font_size": 18,
+    "transparency": 200,
+    "always_on_top": true
+  },
+  "advanced": {
+    "single_instance": true,
+    "minimize_to_tray": true,
+    "check_update": false,
+    "data_cache_expire": 300
+  }
+}
+
