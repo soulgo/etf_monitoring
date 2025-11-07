@@ -78,6 +78,8 @@ class ETFTrayIcon(wx.adv.TaskBarIcon):
         self._on_pause_callback: Optional[Callable] = None
         self._on_auto_start_callback: Optional[Callable] = None
         self._on_exit_callback: Optional[Callable] = None
+        self._on_menu_open_callback: Optional[Callable] = None
+        self._on_menu_close_callback: Optional[Callable] = None
         
         # Set icon
         self._set_icon(icon_path)
@@ -118,7 +120,17 @@ class ETFTrayIcon(wx.adv.TaskBarIcon):
         Returns:
             Context menu
         """
+        # 通知暂停悬浮框守护（避免抢占菜单焦点）
+        if hasattr(self, '_on_menu_open_callback') and self._on_menu_open_callback:
+            try:
+                self._on_menu_open_callback()
+            except Exception as e:
+                self._logger.error(f"Error in menu open callback: {e}")
+        
         menu = wx.Menu()
+        
+        # 绑定菜单销毁事件以恢复守护
+        menu.Bind(wx.EVT_MENU_CLOSE, self._on_menu_close)
         
         # View all ETFs (bold)
         item = menu.Append(wx.ID_ANY, "查看所有基金")
@@ -373,4 +385,21 @@ class ETFTrayIcon(wx.adv.TaskBarIcon):
     def set_on_exit(self, callback: Callable) -> None:
         """Set exit callback."""
         self._on_exit_callback = callback
+    
+    def set_on_menu_open(self, callback: Callable) -> None:
+        """Set menu open callback (called when tray menu opens)."""
+        self._on_menu_open_callback = callback
+    
+    def set_on_menu_close(self, callback: Callable) -> None:
+        """Set menu close callback (called when tray menu closes)."""
+        self._on_menu_close_callback = callback
+    
+    def _on_menu_close(self, event) -> None:
+        """Handle menu close event."""
+        if self._on_menu_close_callback:
+            try:
+                self._on_menu_close_callback()
+            except Exception as e:
+                self._logger.error(f"Error in menu close callback: {e}")
+        event.Skip()
 

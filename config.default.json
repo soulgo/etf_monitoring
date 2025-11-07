@@ -1,9 +1,7 @@
 {
   "config_version": "1.0",
   "etf_list": [
-    "512170",
-    "515790",
-    "512690"
+    "512170"
   ],
   "refresh_interval": 5,
   "rotation_interval": 3,
@@ -17,8 +15,20 @@
     },
     "backup": [
       {
+        "name": "sina",
+        "base_url": "http://hq.sinajs.cn/list=",
+        "timeout": 3,
+        "enabled": true
+      },
+      {
         "name": "tencent",
         "base_url": "http://qt.gtimg.cn/q=",
+        "timeout": 3,
+        "enabled": true
+      },
+      {
+        "name": "xueqiu",
+        "base_url": "https://stock.xueqiu.com/v5/stock/quote.json",
         "timeout": 5,
         "enabled": true
       }

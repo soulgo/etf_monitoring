@@ -587,6 +587,16 @@ class SettingsDialog(wx.Dialog):
         desc.SetForegroundColour(self.COLOR_TEXT_SECONDARY)
         panel_sizer.Add(desc, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 15)
         
+        # Floating window display control
+        floating_label = wx.StaticText(panel, label="悬浮窗显示")
+        floating_font = floating_label.GetFont()
+        floating_font.SetWeight(wx.FONTWEIGHT_SEMIBOLD)
+        floating_label.SetFont(floating_font)
+        panel_sizer.Add(floating_label, 0, wx.LEFT | wx.RIGHT | wx.TOP, 15)
+        
+        self._floating_window_cb = wx.CheckBox(panel, label="显示右下角悬浮窗")
+        panel_sizer.Add(self._floating_window_cb, 0, wx.ALL, 15)
+        
         # Auto start
         auto_start_label = wx.StaticText(panel, label="开机启动")
         auto_font = auto_start_label.GetFont()
@@ -682,6 +692,7 @@ class SettingsDialog(wx.Dialog):
         
         # Cancel button
         cancel_btn = wx.Button(button_panel, wx.ID_CANCEL, "取消", size=(100, 32))
+        cancel_btn.Bind(wx.EVT_BUTTON, self._on_cancel)
         button_sizer.Add(cancel_btn, 0, wx.RIGHT, 10)
         
         # Save button (accent color)
@@ -757,6 +768,10 @@ class SettingsDialog(wx.Dialog):
         rotation_mode = self._config.get('rotation_mode', 'both')
         mode_map = {'timer': 0, 'change': 1, 'both': 2}
         self._rotation_mode.SetSelection(mode_map.get(rotation_mode, 2))
+        
+        # Load floating window enabled state
+        floating_enabled = self._config.get('floating_window.enabled', True)
+        self._floating_window_cb.SetValue(floating_enabled)
         
         # Load auto start
         auto_start = self._config.get('auto_start', False)
@@ -873,6 +888,7 @@ class SettingsDialog(wx.Dialog):
         mode_map = {0: 'timer', 1: 'change', 2: 'both'}
         rotation_mode = mode_map[self._rotation_mode.GetSelection()]
         
+        floating_window_enabled = self._floating_window_cb.GetValue()
         auto_start = self._auto_start_cb.GetValue()
         
         # Update configuration
@@ -880,6 +896,7 @@ class SettingsDialog(wx.Dialog):
         self._config.set('refresh_interval', refresh_interval)
         self._config.set('rotation_interval', rotation_interval)
         self._config.set('rotation_mode', rotation_mode)
+        self._config.set('floating_window.enabled', floating_window_enabled)
         self._config.set('auto_start', auto_start)
         
         # Save to file
@@ -892,6 +909,11 @@ class SettingsDialog(wx.Dialog):
                 "保存失败",
                 wx.OK | wx.ICON_ERROR
             )
+    
+    def _on_cancel(self, event) -> None:
+        """Handle cancel button - close dialog without saving."""
+        self._logger.info("Settings dialog cancelled")
+        self.EndModal(wx.ID_CANCEL)
     
     def _on_reset(self, event) -> None:
         """Handle reset button."""

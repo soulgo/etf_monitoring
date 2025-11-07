@@ -42,9 +42,10 @@ class FloatingWindow(wx.Frame):
             transparency: 透明度 (0-255, 255为不透明)
             rotation_interval: 轮播间隔（秒）
         """
-        # 创建无边框、置顶的窗口
+        # 创建无边框、置顶的工具窗口
+        # 使用 FRAME_TOOL_WINDOW 代替 FRAME_NO_TASKBAR，避免系统菜单导致窗口消失
         style = (
-            wx.FRAME_NO_TASKBAR |
+            wx.FRAME_TOOL_WINDOW |  # 工具窗口，不在任务栏显示，更稳定
             wx.STAY_ON_TOP |
             wx.NO_BORDER
         )
@@ -76,7 +77,12 @@ class FloatingWindow(wx.Frame):
         # 数据
         self._etf_data: Dict[str, ETFQuote] = {}
         self._etf_codes: list = []
+        self._changed_etf_codes: list = []  # 只存储有变化的ETF代码
         self._current_index = 0
+        
+        # 窗口状态追踪
+        self._user_hidden = False  # 是否由用户主动隐藏
+        self._guard_paused = False  # 守护是否暂停（用于托盘菜单等场景）
         
         # 拖动相关
         self._dragging = False
@@ -101,6 +107,9 @@ class FloatingWindow(wx.Frame):
         # 自动定位到右下角
         self._position_bottom_right()
         
+        # 确保窗口始终置顶
+        self._ensure_always_on_top()
+        
         # 绑定事件
         self._bind_events()
         
@@ -111,7 +120,16 @@ class FloatingWindow(wx.Frame):
         # 数据加载超时检测定时器（10秒）
         self._timeout_timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self._on_timeout_check, self._timeout_timer)
-        self._timeout_timer.Start(10000, wx.TIMER_ONE_SHOT)  # 10秒后触发一次
+        
+        # 窗口可见性守护定时器（每100ms检查一次，更快响应）
+        self._visibility_guard_timer = wx.Timer(self)
+        self.Bind(wx.EVT_TIMER, self._on_visibility_guard, self._visibility_guard_timer)
+        self._visibility_guard_timer.Start(100)  # 每100ms检查一次，确保快速恢复
+        
+        # 检查是否在交易时间，如果闭市则不启动超时检测
+        from ..utils.helpers import is_trading_time
+        if is_trading_time():
+            self._timeout_timer.Start(10000, wx.TIMER_ONE_SHOT)  # 10秒后触发一次
         self._data_loaded = False
         
         # 立即刷新显示，确保初始状态可见
@@ -366,6 +384,26 @@ class FloatingWindow(wx.Frame):
             # 出错则使用默认位置
             self.SetPosition((100, 100))
     
+    def _ensure_always_on_top(self):
+        """确保窗口始终置顶（使用多种方法组合）。"""
+        try:
+            # 方法1: 使用 Raise() 提升窗口
+            self.Raise()
+            
+            # 方法2: 重新设置窗口样式（强制应用STAY_ON_TOP）
+            current_style = self.GetWindowStyle()
+            # 先移除STAY_ON_TOP，再重新添加（强制刷新）
+            if current_style & wx.STAY_ON_TOP:
+                self.SetWindowStyle(current_style & ~wx.STAY_ON_TOP)
+            self.SetWindowStyle(current_style | wx.STAY_ON_TOP)
+            
+            # 方法3: 再次调用Raise()确保生效
+            self.Raise()
+            
+            self._logger.debug("Window raised to always on top")
+        except Exception as e:
+            self._logger.warning(f"Failed to ensure always on top: {e}")
+    
     def _bind_events(self):
         """绑定事件。"""
         # 鼠标拖动/缩放事件绑定到窗口及子控件
@@ -374,6 +412,7 @@ class FloatingWindow(wx.Frame):
             widget.Bind(wx.EVT_LEFT_UP, self._on_left_up)
             widget.Bind(wx.EVT_MOTION, self._on_mouse_move)
             widget.Bind(wx.EVT_LEAVE_WINDOW, self._on_mouse_leave)
+            widget.Bind(wx.EVT_ENTER_WINDOW, self._on_mouse_enter)  # 鼠标进入时置顶
 
         # 鼠标捕获丢失
         self.Bind(wx.EVT_MOUSE_CAPTURE_LOST, self._on_capture_lost)
@@ -387,16 +426,35 @@ class FloatingWindow(wx.Frame):
         # 双击隐藏
         self._panel.Bind(wx.EVT_LEFT_DCLICK, self._on_double_click)
         self._text.Bind(wx.EVT_LEFT_DCLICK, self._on_double_click)
+        
+        # 绑定关闭事件，阻止销毁，改为隐藏
+        self.Bind(wx.EVT_CLOSE, self._on_close)
+        
+        # 监听窗口显示/隐藏事件，防止意外隐藏
+        self.Bind(wx.EVT_SHOW, self._on_show_event)
     
-    def update_data(self, etf_data: Dict[str, ETFQuote]):
+    def update_data(self, etf_data: Dict[str, ETFQuote], changed_codes: list = None):
         """
         更新 ETF 数据。
         
         Args:
             etf_data: ETF 数据字典
+            changed_codes: 价格有变化的ETF代码列表（可选）
         """
         self._etf_data = etf_data.copy()
         self._etf_codes = list(etf_data.keys())
+        
+        # 如果提供了变化列表，只轮播有变化的ETF
+        if changed_codes:
+            self._changed_etf_codes = [code for code in changed_codes if code in etf_data]
+            self._logger.debug(f"Changed ETFs: {len(self._changed_etf_codes)} of {len(self._etf_codes)}")
+        else:
+            # 否则轮播所有ETF
+            self._changed_etf_codes = list(etf_data.keys())
+        
+        # 如果当前轮播列表为空，回退到全部
+        if not self._changed_etf_codes:
+            self._changed_etf_codes = list(etf_data.keys())
         
         # 标记数据已加载
         if not self._data_loaded and etf_data:
@@ -423,8 +481,14 @@ class FloatingWindow(wx.Frame):
     
     def _on_rotation_timer(self, event):
         """轮播定时器触发。"""
-        if self._etf_codes:
-            self._current_index = (self._current_index + 1) % len(self._etf_codes)
+        from ..utils.helpers import is_trading_time
+        
+        # 闭市时停止轮播
+        if not is_trading_time():
+            return
+        
+        if self._changed_etf_codes:
+            self._current_index = (self._current_index + 1) % len(self._changed_etf_codes)
             self._update_display()
     
     def _on_timeout_check(self, event):
@@ -436,9 +500,56 @@ class FloatingWindow(wx.Frame):
             self._text.SetForegroundColour(wx.Colour(139, 0, 0))  # 深红
             self._panel.Refresh()
     
+    def _on_visibility_guard(self, event):
+        """窗口可见性和层级守护，防止意外隐藏或被遮挡。"""
+        try:
+            # 如果守护被暂停（如托盘菜单显示时），跳过守护
+            if self._guard_paused:
+                return
+            
+            # 检查1: 如果窗口不可见且不是用户主动隐藏的，自动恢复显示
+            if not self.IsShown() and not self._user_hidden:
+                self._logger.warning("Window unexpectedly hidden, restoring visibility")
+                self.Show(True)
+                self._ensure_always_on_top()
+            
+            # 检查2: 如果窗口可见但不是用户主动隐藏，强制保持在最顶层
+            # 使用强力方法对抗任务栏等系统窗口
+            elif self.IsShown() and not self._user_hidden:
+                # 每次都强制提升（对抗工具栏右键菜单）
+                self.Raise()
+                
+                # 每10次守护（约1秒）重新设置一次窗口样式，确保STAY_ON_TOP生效
+                if not hasattr(self, '_guard_counter'):
+                    self._guard_counter = 0
+                self._guard_counter += 1
+                
+                if self._guard_counter >= 10:  # 每1秒
+                    self._guard_counter = 0
+                    current_style = self.GetWindowStyle()
+                    if current_style & wx.STAY_ON_TOP:
+                        # 强制刷新STAY_ON_TOP样式
+                        self.SetWindowStyle(current_style & ~wx.STAY_ON_TOP)
+                        self.SetWindowStyle(current_style | wx.STAY_ON_TOP)
+                        self.Raise()
+                
+        except Exception as e:
+            self._logger.error(f"Error in visibility guard: {e}")
+    
     def _update_display(self):
         """更新显示内容。"""
-        if not self._etf_codes or not self._etf_data:
+        # 在开头添加闭市检测
+        from ..utils.helpers import is_trading_time
+        
+        if not is_trading_time():
+            # 闭市时显示固定信息，不轮播
+            self._text.SetLabel("已收盘")
+            self._panel.SetBackgroundColour(wx.Colour(200, 200, 200))
+            self._text.SetForegroundColour(wx.Colour(80, 80, 80))
+            self._panel.Refresh()
+            return
+        
+        if not self._changed_etf_codes or not self._etf_data:
             # 显示更明显的加载提示
             self._text.SetLabel("正在获取数据...")
             self._panel.SetBackgroundColour(wx.Colour(255, 250, 205))  # 浅黄色
@@ -448,10 +559,10 @@ class FloatingWindow(wx.Frame):
             return
         
         # 确保索引有效
-        if self._current_index >= len(self._etf_codes):
+        if self._current_index >= len(self._changed_etf_codes):
             self._current_index = 0
         
-        code = self._etf_codes[self._current_index]
+        code = self._changed_etf_codes[self._current_index]  # 改用变化列表
         quote = self._etf_data.get(code)
         
         if not quote:
@@ -489,6 +600,10 @@ class FloatingWindow(wx.Frame):
             # 强制刷新显示
             self._panel.Refresh()
             self._panel.Update()
+            
+            # 确保窗口保持在最顶层
+            self.Raise()
+            
             self._logger.debug(f"Display updated: {display_text}")
             
         except Exception as e:
@@ -612,6 +727,13 @@ class FloatingWindow(wx.Frame):
         
         event.Skip()
 
+    def _on_mouse_enter(self, event):
+        """鼠标进入窗口区域 - 确保窗口置顶。"""
+        # 鼠标进入时，确保窗口在最顶层（防止被任务栏遮挡）
+        if not self._user_hidden:
+            self.Raise()
+        event.Skip()
+    
     def _on_mouse_leave(self, event):
         """鼠标离开窗口区域。"""
         if not self._dragging and not self._resizing:
@@ -637,8 +759,26 @@ class FloatingWindow(wx.Frame):
     
     def _on_double_click(self, event):
         """双击隐藏窗口。"""
+        self._user_hidden = True  # 标记为用户主动隐藏
         self.Hide()
         self._logger.info("Floating window hidden by double-click")
+    
+    def _on_close(self, event):
+        """Handle window close - hide instead of destroy."""
+        self._user_hidden = True  # 标记为用户主动隐藏
+        self.Hide()
+        self._logger.info("Floating window closed, hiding instead of destroying")
+    
+    def _on_show_event(self, event):
+        """监听窗口显示/隐藏事件。"""
+        is_shown = event.IsShown()
+        
+        if not is_shown and not self._user_hidden:
+            # 窗口被意外隐藏（不是用户主动隐藏）
+            self._logger.warning("Floating window unexpectedly hidden (possibly by system event)")
+        
+        # 事件必须Skip，否则会影响正常显示逻辑
+        event.Skip()
     
     def _on_right_click(self, event):
         """右键菜单。"""
@@ -664,11 +804,17 @@ class FloatingWindow(wx.Frame):
         
         # 隐藏
         hide_item = menu.Append(wx.ID_ANY, "隐藏悬浮窗")
-        menu.Bind(wx.EVT_MENU, lambda e: self.Hide(), hide_item)
+        menu.Bind(wx.EVT_MENU, self._on_menu_hide, hide_item)
         
         # 显示菜单
         self._panel.PopupMenu(menu)
         menu.Destroy()
+    
+    def _on_menu_hide(self, event):
+        """从菜单隐藏窗口。"""
+        self._user_hidden = True  # 标记为用户主动隐藏
+        self.Hide()
+        self._logger.info("Floating window hidden from menu")
     
     def _set_transparency(self, value):
         """设置透明度。"""
@@ -721,10 +867,34 @@ class FloatingWindow(wx.Frame):
         self._sync_window_size()
         return (self._window_width, self._window_height)
     
+    def Show(self, show=True):
+        """重写 Show 方法，确保显示时置顶。"""
+        if show:
+            # 显示窗口时重置隐藏标志
+            self._user_hidden = False
+        
+        result = super().Show(show)
+        if show:
+            # 显示窗口时确保置顶
+            self._ensure_always_on_top()
+        return result
+    
+    def pause_guard(self):
+        """暂停窗口守护（用于显示菜单等场景，避免抢占焦点）。"""
+        self._guard_paused = True
+        self._logger.debug("Window guard paused")
+    
+    def resume_guard(self):
+        """恢复窗口守护。"""
+        self._guard_paused = False
+        self._logger.debug("Window guard resumed")
+    
     def cleanup(self):
         """清理资源。"""
         self.stop_rotation()
         if self._timeout_timer.IsRunning():
             self._timeout_timer.Stop()
+        if self._visibility_guard_timer.IsRunning():
+            self._visibility_guard_timer.Stop()
         if self.HasCapture():
             self.ReleaseMouse()

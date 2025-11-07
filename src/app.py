@@ -149,6 +149,8 @@ class ETFMonitorApp(wx.App):
         self.tray_icon.set_on_pause(self._on_pause_toggle)
         self.tray_icon.set_on_auto_start(self._on_auto_start_toggle)
         self.tray_icon.set_on_exit(self._on_exit)
+        self.tray_icon.set_on_menu_open(self._on_tray_menu_open)
+        self.tray_icon.set_on_menu_close(self._on_tray_menu_close)
         
         self.logger.info("Tray icon initialized")
         
@@ -219,7 +221,7 @@ class ETFMonitorApp(wx.App):
         # Update floating window
         if self.floating_window:
             try:
-                self.floating_window.update_data(etf_data)
+                self.floating_window.update_data(etf_data, changed_codes)  # 传递变化列表
                 self.logger.info(f"Floating window updated successfully with {len(etf_data)} ETFs")
             except Exception as e:
                 self.logger.error(f"Failed to update floating window: {e}", exc_info=True)
@@ -310,6 +312,18 @@ class ETFMonitorApp(wx.App):
             wx.OK | wx.ICON_INFORMATION
         )
     
+    def _on_tray_menu_open(self) -> None:
+        """Handle tray menu open - pause floating window guard."""
+        if self.floating_window:
+            self.floating_window.pause_guard()
+            self.logger.debug("Floating window guard paused for tray menu")
+    
+    def _on_tray_menu_close(self) -> None:
+        """Handle tray menu close - resume floating window guard."""
+        if self.floating_window:
+            self.floating_window.resume_guard()
+            self.logger.debug("Floating window guard resumed after tray menu")
+    
     def _on_exit(self) -> None:
         """Handle application exit."""
         # Confirm exit
@@ -339,6 +353,16 @@ class ETFMonitorApp(wx.App):
         rotation_interval = self.config.get('rotation_interval', 3)
         rotation_mode = self.config.get('rotation_mode', 'both')
         self.tray_icon.update_rotation_settings(rotation_interval, rotation_mode)
+        
+        # Control floating window display
+        floating_enabled = self.config.get('floating_window.enabled', True)
+        if self.floating_window:
+            if floating_enabled:
+                self.floating_window.Show()
+                self.logger.info("Floating window shown")
+            else:
+                self.floating_window.Hide()
+                self.logger.info("Floating window hidden")
         
         self.logger.info("Configuration reloaded")
     

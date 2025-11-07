@@ -75,7 +75,7 @@ class DataFetcher:
         
         # Failover tracking
         self._consecutive_failures = 0
-        self._using_backup = False
+        self._current_adapter_index = -1  # -1 means primary, 0+ means backup index
         self._last_failover_time = 0
         
         # Performance tracking
@@ -168,15 +168,19 @@ class DataFetcher:
                 
                 # 检查交易时间
                 trading = is_trading_time()
-                wait_interval = self._refresh_interval
                 
                 if not trading:
-                    # 非交易时间，延长刷新间隔到60秒
+                    # 闭市后：停止API调用，等待60秒后再检查
                     wait_interval = 60
                     trading_status = get_next_trading_time()
-                    self._logger.debug(f"非交易时间: {trading_status}")
+                    self._logger.debug(f"闭市状态: {trading_status}")
+                    
+                    # 闭市后不调用 _fetch_all_quotes()，直接等待
+                    if self._stop_event.wait(timeout=wait_interval):
+                        break
+                    continue
                 
-                # Fetch all ETF quotes
+                # 开市状态：正常获取数据
                 start_time = time.time()
                 self._fetch_all_quotes()
                 duration = time.time() - start_time
@@ -191,7 +195,7 @@ class DataFetcher:
                 )
                 
                 # Wait for next interval or stop event
-                if self._stop_event.wait(timeout=wait_interval):
+                if self._stop_event.wait(timeout=self._refresh_interval):
                     break
                     
             except Exception as e:
@@ -255,9 +259,9 @@ class DataFetcher:
                     if self._consecutive_failures > 0:
                         self._consecutive_failures = 0
                     
-                    # Try to switch back to primary after 5 minutes
-                    if self._using_backup:
-                        self._try_switch_to_primary()
+                    # Try to switch back to higher priority adapter after 5 minutes
+                    if self._current_adapter_index >= 0:
+                        self._try_switch_to_higher_priority()
                     
                     return quote
                 
@@ -288,51 +292,91 @@ class DataFetcher:
         self._consecutive_failures += 1
         
         # Check if failover needed
-        if (self._consecutive_failures >= self._failover_threshold and
-            not self._using_backup and
-            self._backup_adapters):
-            
-            self._logger.warning(
-                f"Primary API failed {self._consecutive_failures} times, "
-                "switching to backup"
-            )
-            self._switch_to_backup()
+        if self._consecutive_failures >= self._failover_threshold:
+            # Try to switch to next available backup adapter
+            if self._current_adapter_index < len(self._backup_adapters) - 1:
+                self._logger.warning(
+                    f"Current API failed {self._consecutive_failures} times, "
+                    "switching to next backup"
+                )
+                self._switch_to_next_backup()
+            else:
+                self._logger.error(
+                    f"All adapters exhausted, staying with current adapter"
+                )
     
-    def _switch_to_backup(self) -> None:
-        """Switch to backup API adapter."""
+    def _switch_to_next_backup(self) -> None:
+        """
+        Switch to next backup API adapter in priority order.
+        
+        Priority order: Primary -> Backup[0] -> Backup[1] -> Backup[2]
+        """
         if not self._backup_adapters:
             self._logger.error("No backup adapters available")
             return
         
-        # Use first available backup
-        self._current_adapter = self._backup_adapters[0]
-        self._using_backup = True
+        # Increment to next backup adapter
+        self._current_adapter_index += 1
+        
+        # Ensure we don't exceed available backups
+        if self._current_adapter_index >= len(self._backup_adapters):
+            self._current_adapter_index = len(self._backup_adapters) - 1
+            self._logger.warning("Already at last backup adapter")
+            return
+        
+        # Switch to next backup
+        self._current_adapter = self._backup_adapters[self._current_adapter_index]
         self._last_failover_time = time.time()
         self._consecutive_failures = 0
         
+        adapter_name = self._current_adapter.__class__.__name__
         self._logger.warning(
-            f"Switched to backup API: {self._current_adapter.__class__.__name__}"
+            f"Switched to backup API [{self._current_adapter_index}]: {adapter_name}"
         )
     
-    def _try_switch_to_primary(self) -> None:
-        """Try to switch back to primary API after cooldown period."""
+    def _try_switch_to_higher_priority(self) -> None:
+        """
+        Try to switch back to higher priority adapter after cooldown period.
+        
+        Will try to switch back in reverse priority order:
+        Backup[2] -> Backup[1] -> Backup[0] -> Primary
+        """
         # Only try every 5 minutes
         if time.time() - self._last_failover_time < 300:
             return
         
-        # Test primary adapter with a single ETF
-        if self._etf_codes:
-            test_code = self._etf_codes[0]
-            try:
-                quote = self._primary_adapter.fetch_quote(test_code)
-                if quote:
-                    # Primary is working again
-                    self._current_adapter = self._primary_adapter
-                    self._using_backup = False
-                    self._logger.info("Switched back to primary API")
-            except:
-                # Primary still failing, will try again later
-                pass
+        if not self._etf_codes:
+            return
+        
+        # Test next higher priority adapter
+        test_code = self._etf_codes[0]
+        target_index = self._current_adapter_index - 1
+        
+        # Determine which adapter to test
+        if target_index >= 0:
+            test_adapter = self._backup_adapters[target_index]
+            adapter_type = "backup"
+        else:
+            test_adapter = self._primary_adapter
+            adapter_type = "primary"
+        
+        try:
+            quote = test_adapter.fetch_quote(test_code)
+            if quote:
+                # Higher priority adapter is working again
+                self._current_adapter = test_adapter
+                self._current_adapter_index = target_index
+                self._last_failover_time = time.time()
+                
+                adapter_name = test_adapter.__class__.__name__
+                self._logger.info(
+                    f"Switched back to {adapter_type} API [{target_index}]: {adapter_name}"
+                )
+        except Exception as e:
+            # Higher priority adapter still failing, will try again later
+            self._logger.debug(
+                f"Higher priority adapter [{target_index}] still failing: {e}"
+            )
     
     def get_status(self) -> dict:
         """
@@ -341,12 +385,19 @@ class DataFetcher:
         Returns:
             Dictionary with status information
         """
+        # Determine adapter type
+        if self._current_adapter_index < 0:
+            adapter_type = "primary"
+        else:
+            adapter_type = f"backup[{self._current_adapter_index}]"
+        
         return {
             'running': self._running,
             'paused': self._paused,
             'etf_count': len(self._etf_codes),
             'refresh_interval': self._refresh_interval,
-            'using_backup': self._using_backup,
+            'adapter_index': self._current_adapter_index,
+            'adapter_type': adapter_type,
             'current_adapter': self._current_adapter.__class__.__name__,
             'consecutive_failures': self._consecutive_failures,
             'last_fetch_time': self._last_fetch_time,

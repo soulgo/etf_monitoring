@@ -200,6 +200,131 @@ class EastMoneyAdapter(QuoteAPIAdapter):
         return datetime.now().strftime("%H:%M:%S")
 
 
+class SinaAdapter(QuoteAPIAdapter):
+    """
+    Adapter for Sina Finance (新浪财经) API.
+    
+    API: http://hq.sinajs.cn/list=
+    Response format: CSV-like string with comma-separated fields
+    Fields: 0=name, 1=open, 2=pre_close, 3=price, 4=high, 5=low,
+            6=bid, 7=ask, 8=volume, 9=amount, 10-31=various fields
+    """
+    
+    def fetch_quote(self, code: str) -> Optional[ETFQuote]:
+        """
+        Fetch quote from Sina Finance API.
+        
+        Args:
+            code: 6-digit ETF code
+            
+        Returns:
+            ETFQuote object or None if failed
+        """
+        try:
+            # Get market prefix
+            market = 'sh' if get_market_prefix(code) == '1' else 'sz'
+            symbol = f"{market}{code}"
+            
+            # Build request URL
+            url = f"{self.base_url}{symbol}"
+            
+            # Send request
+            self.logger.debug(f"Fetching {code} from Sina")
+            response = self.client.get(url)
+            response.raise_for_status()
+            
+            # Parse response
+            # Format: var hq_str_sh512170="医疗ETF,1.234,1.230,1.235,...";
+            content = response.text.strip()
+            
+            if not content or '=' not in content:
+                self.logger.warning(f"Invalid response for {code}: {content}")
+                return None
+            
+            # Extract data between quotes
+            start = content.find('"') + 1
+            end = content.rfind('"')
+            if start <= 0 or end <= start:
+                return None
+            
+            data_str = content[start:end]
+            
+            # Check if empty response (market closed or invalid code)
+            if not data_str:
+                self.logger.warning(f"Empty data for {code}")
+                return None
+            
+            fields = data_str.split(',')
+            
+            if len(fields) < 32:  # Sina API returns 32+ fields
+                self.logger.warning(f"Insufficient fields for {code}: {len(fields)}")
+                return None
+            
+            # Extract fields (indices based on Sina API documentation)
+            name = fields[0]
+            price = fields[3]
+            pre_close = fields[2]
+            volume = fields[8]
+            update_date = fields[30]  # YYYY-MM-DD
+            update_time = fields[31]  # HH:MM:SS
+            
+            # Validate required fields
+            if not price or not pre_close:
+                self.logger.warning(f"Missing required fields for {code}")
+                return None
+            
+            # Convert to float and calculate change
+            try:
+                price_f = float(price)
+                pre_close_f = float(pre_close)
+                
+                if pre_close_f > 0:
+                    change_percent = ((price_f - pre_close_f) / pre_close_f) * 100.0
+                    change = price_f - pre_close_f
+                else:
+                    change_percent = 0.0
+                    change = 0.0
+                    
+            except ValueError:
+                self.logger.warning(f"Invalid numeric data for {code}")
+                return None
+            
+            # Format update time
+            if not update_time or len(update_time) < 8:
+                update_time = datetime.now().strftime("%H:%M:%S")
+            else:
+                # Format is already HH:MM:SS
+                update_time = update_time
+            
+            # Create ETFQuote object
+            quote = ETFQuote(
+                code=code,
+                name=name,
+                price=float(price_f),
+                change=float(change),
+                change_percent=float(change_percent),
+                volume=int(float(volume)) if volume else 0,
+                pre_close=float(pre_close_f),
+                update_time=update_time,
+                timestamp=time.time()
+            )
+            
+            self.logger.debug(f"Successfully fetched {code}: {price_f} ({change_percent:.2f}%)")
+            return quote
+            
+        except httpx.TimeoutException:
+            self.logger.error(f"Timeout fetching {code} from Sina")
+            return None
+            
+        except httpx.HTTPError as e:
+            self.logger.error(f"HTTP error fetching {code}: {e}")
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"Error fetching {code} from Sina: {e}")
+            return None
+
+
 class TencentAdapter(QuoteAPIAdapter):
     """
     Adapter for Tencent (腾讯) API.
@@ -319,14 +444,147 @@ class TencentAdapter(QuoteAPIAdapter):
             return None
 
 
+class XueqiuAdapter(QuoteAPIAdapter):
+    """
+    Adapter for Xueqiu (雪球) API.
+    
+    API: https://stock.xueqiu.com/v5/stock/quote.json
+    Response format: JSON with quote data
+    Requires User-Agent header to simulate browser access
+    """
+    
+    def __init__(self, base_url: str, timeout: int = 5):
+        """
+        Initialize Xueqiu adapter with custom headers.
+        
+        Args:
+            base_url: API base URL
+            timeout: Request timeout in seconds
+        """
+        super().__init__(base_url, timeout)
+        
+        # Override client with custom headers for Xueqiu
+        self.client = httpx.Client(
+            timeout=timeout,
+            limits=httpx.Limits(max_keepalive_connections=5, max_connections=10),
+            headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Referer': 'https://xueqiu.com/'
+            }
+        )
+    
+    def fetch_quote(self, code: str) -> Optional[ETFQuote]:
+        """
+        Fetch quote from Xueqiu API.
+        
+        Args:
+            code: 6-digit ETF code
+            
+        Returns:
+            ETFQuote object or None if failed
+        """
+        try:
+            # Get market prefix for Xueqiu symbol format
+            market = 'SH' if get_market_prefix(code) == '1' else 'SZ'
+            symbol = f"{market}{code}"
+            
+            # Build request URL
+            url = self.base_url
+            params = {
+                'symbol': symbol,
+                'extend': 'detail'
+            }
+            
+            # Send request
+            self.logger.debug(f"Fetching {code} from Xueqiu")
+            response = self.client.get(url, params=params)
+            response.raise_for_status()
+            
+            # Parse JSON response
+            data = response.json()
+            
+            if 'data' not in data or 'quote' not in data['data']:
+                self.logger.warning(f"Invalid response for {code}: {data}")
+                return None
+            
+            quote_data = data['data']['quote']
+            
+            # Extract fields
+            name = quote_data.get('name', f'ETF{code}')
+            price = quote_data.get('current')  # 当前价
+            pre_close = quote_data.get('last_close')  # 昨收价
+            volume = quote_data.get('volume', 0)  # 成交量
+            timestamp_ms = quote_data.get('timestamp', int(time.time() * 1000))
+            
+            # Validate required fields
+            if price is None or pre_close is None:
+                self.logger.warning(f"Missing required fields for {code}")
+                return None
+            
+            # Calculate change and change_percent
+            try:
+                price_f = float(price)
+                pre_close_f = float(pre_close)
+                
+                if pre_close_f > 0:
+                    change_percent = ((price_f - pre_close_f) / pre_close_f) * 100.0
+                    change = price_f - pre_close_f
+                else:
+                    change_percent = 0.0
+                    change = 0.0
+                    
+            except (ValueError, TypeError):
+                self.logger.warning(f"Invalid numeric data for {code}")
+                return None
+            
+            # Format update time from timestamp
+            update_time = datetime.fromtimestamp(timestamp_ms / 1000).strftime("%H:%M:%S")
+            
+            # Create ETFQuote object
+            quote = ETFQuote(
+                code=code,
+                name=name,
+                price=float(price_f),
+                change=float(change),
+                change_percent=float(change_percent),
+                volume=int(volume) if volume else 0,
+                pre_close=float(pre_close_f),
+                update_time=update_time,
+                timestamp=time.time()
+            )
+            
+            self.logger.debug(f"Successfully fetched {code}: {price_f} ({change_percent:.2f}%)")
+            return quote
+            
+        except httpx.TimeoutException:
+            self.logger.error(f"Timeout fetching {code} from Xueqiu")
+            return None
+            
+        except httpx.HTTPError as e:
+            self.logger.error(f"HTTP error fetching {code}: {e}")
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"Error fetching {code} from Xueqiu: {e}")
+            return None
+
+
 class APIAdapterFactory:
     """
     Factory for creating API adapters based on configuration.
+    
+    Supported adapters:
+    - eastmoney: 东方财富 (EastMoney)
+    - sina: 新浪财经 (Sina Finance)
+    - tencent: 腾讯财经 (Tencent)
+    - xueqiu: 雪球 (Xueqiu)
     """
     
     ADAPTERS = {
         'eastmoney': EastMoneyAdapter,
+        'sina': SinaAdapter,
         'tencent': TencentAdapter,
+        'xueqiu': XueqiuAdapter,
     }
     
     @classmethod
