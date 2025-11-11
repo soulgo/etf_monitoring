@@ -174,7 +174,7 @@ def is_trading_time() -> bool:
     
     交易时间：
     - 周一到周五
-    - 上午：09:30-11:30
+    - 上午：09:00-11:30（包含盘前准备和集合竞价）
     - 下午：13:00-15:00
     
     Returns:
@@ -191,8 +191,8 @@ def is_trading_time() -> bool:
     # 检查时间
     current_time = now.time()
     
-    # 上午交易时间 09:30-11:30
-    morning_start = time(9, 30)
+    # 上午交易时间 09:00-11:30（包含盘前和集合竞价）
+    morning_start = time(9, 0)
     morning_end = time(11, 30)
     
     # 下午交易时间 13:00-15:00
@@ -219,9 +219,9 @@ def get_next_trading_time() -> str:
     if now.weekday() >= 5:
         return "周末休市"
     
-    # 早于09:30
-    if current_time < time(9, 30):
-        return "开盘时间 09:30"
+    # 早于09:00
+    if current_time < time(9, 0):
+        return "盘前准备，09:00 开始"
     
     # 11:30-13:00午休
     if time(11, 30) < current_time < time(13, 0):
@@ -229,7 +229,7 @@ def get_next_trading_time() -> str:
     
     # 15:00后
     if current_time > time(15, 0):
-        return "已收盘，明日 09:30 开盘"
+        return "已收盘，明日 09:00 开始"
     
     return "交易中"
 

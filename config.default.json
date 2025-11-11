@@ -3,7 +3,7 @@
   "etf_list": [
     "512170"
   ],
-  "refresh_interval": 5,
+  "refresh_interval": 10,
   "rotation_interval": 3,
   "rotation_mode": "both",
   "api_config": {
@@ -33,9 +33,9 @@
         "enabled": true
       }
     ],
-    "retry_count": 3,
-    "retry_interval": 1,
-    "failover_threshold": 3
+    "retry_count": 2,
+    "retry_interval": 2,
+    "failover_threshold": 2
   },
   "display_config": {
     "tooltip_format": "{name} ({code})\n最新价: {price} ({change_percent})\n更新: {time}",

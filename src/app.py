@@ -43,7 +43,7 @@ class ETFMonitorApp(wx.App):
         self.logger = setup_logger(log_level=getattr(__import__('logging'), log_level))
         
         self.logger.info("=" * 60)
-        self.logger.info("ETF Monitor v1.0.0 Starting")
+        self.logger.info("ETF Monitor v1.2.0 Starting")
         self.logger.info("=" * 60)
         
         # Check single instance
@@ -119,6 +119,10 @@ class ETFMonitorApp(wx.App):
         retry_interval = api_config.get('retry_interval', 1)
         failover_threshold = api_config.get('failover_threshold', 3)
         
+        # 确保primary_adapter不为None
+        if self.primary_adapter is None:
+            raise RuntimeError("Failed to initialize primary API adapter")
+        
         self.data_fetcher = DataFetcher(
             etf_codes=etf_list,
             primary_adapter=self.primary_adapter,
@@ -182,6 +186,7 @@ class ETFMonitorApp(wx.App):
     def _start_services(self) -> None:
         """Start background services."""
         # Start data fetcher
+        self.data_fetcher.daemon = True
         self.data_fetcher.start()
         
         # Trigger immediate refresh to load initial data quickly
@@ -316,55 +321,73 @@ class ETFMonitorApp(wx.App):
         """Handle tray menu open - pause floating window guard."""
         if self.floating_window:
             self.floating_window.pause_guard()
-            self.logger.debug("Floating window guard paused for tray menu")
+            self.logger.info("[托盘菜单] 菜单打开，暂停悬浮窗守护")
     
     def _on_tray_menu_close(self) -> None:
         """Handle tray menu close - resume floating window guard."""
         if self.floating_window:
             self.floating_window.resume_guard()
-            self.logger.debug("Floating window guard resumed after tray menu")
+            self.logger.info("[托盘菜单] 菜单关闭，恢复悬浮窗守护")
     
     def _on_exit(self) -> None:
         """Handle application exit."""
-        # Confirm exit
-        if wx.MessageBox(
-            "确定要退出 ETF 监控工具吗？",
-            "确认退出",
-            wx.YES_NO | wx.ICON_QUESTION
-        ) == wx.YES:
-            self.logger.info("User requested exit")
-            self._shutdown()
-            wx.Exit()
+        # Prevent duplicate exit requests
+        if hasattr(self, '_exit_in_progress') and self._exit_in_progress:
+            self.logger.info("Exit already in progress, ignoring duplicate request")
+            return
+        
+        self._exit_in_progress = True
+        self.logger.info("Exit requested. Initiating shutdown.")
+        
+        # Execute shutdown and exit immediately without delay
+        self._shutdown()
+        self._do_exit()
+    
+    def _do_exit(self) -> None:
+        """执行实际的退出操作。"""
+        try:
+            # 立即退出主循环
+            self.ExitMainLoop()
+        except Exception as e:
+            self.logger.error(f"Error during exit: {e}")
+            # 如果正常退出失败，强制退出
+            import os
+            os._exit(0)
     
     def _reload_configuration(self) -> None:
         """Reload configuration and restart services."""
+        self.logger.info("[配置重载] 开始重新加载配置...")
+        
         # Reload config
         self.config.reload()
         
         # Update ETF list
         etf_list = self.config.get('etf_list', [])
         self.data_fetcher.update_etf_list(etf_list)
+        self.logger.info(f"[配置重载] ETF列表已更新: {len(etf_list)} 个 - {', '.join(etf_list)}")
         
         # Update refresh interval
         refresh_interval = self.config.get('refresh_interval', 5)
         self.data_fetcher.update_refresh_interval(refresh_interval)
+        self.logger.info(f"[配置重载] 刷新间隔已更新: {refresh_interval}秒")
         
         # Update rotation settings
         rotation_interval = self.config.get('rotation_interval', 3)
         rotation_mode = self.config.get('rotation_mode', 'both')
         self.tray_icon.update_rotation_settings(rotation_interval, rotation_mode)
+        self.logger.info(f"[配置重载] 轮播设置已更新: {rotation_interval}秒, 模式={rotation_mode}")
         
         # Control floating window display
         floating_enabled = self.config.get('floating_window.enabled', True)
         if self.floating_window:
             if floating_enabled:
                 self.floating_window.Show()
-                self.logger.info("Floating window shown")
+                self.logger.info("[配置重载] 悬浮窗已显示")
             else:
                 self.floating_window.Hide()
-                self.logger.info("Floating window hidden")
+                self.logger.info("[配置重载] 悬浮窗已隐藏")
         
-        self.logger.info("Configuration reloaded")
+        self.logger.info("[配置重载] 配置重载完成")
     
     def _fetch_etf_name(self, code: str) -> str:
         """
@@ -383,50 +406,71 @@ class ETFMonitorApp(wx.App):
         
         # If not in cache, fetch from API
         try:
-            quote = self.primary_adapter.fetch_quote(code)
-            if quote and quote.name:
-                return quote.name
+            # 确保primary_adapter不为None
+            if self.primary_adapter is not None:
+                quote = self.primary_adapter.fetch_quote(code)
+                if quote and quote.name:
+                    return quote.name
         except Exception as e:
             self.logger.warning(f"Failed to fetch name for {code}: {e}")
         
         return f"ETF{code}"
-    
+
     def _shutdown(self) -> None:
         """Graceful shutdown of all services."""
         self.logger.info("Shutting down application...")
         
-        # Stop and cleanup floating window
-        if hasattr(self, 'floating_window') and self.floating_window:
-            # Save position
-            position = self.floating_window.get_position_config()
-            size = self.floating_window.get_size_config()
-            self.config.set('floating_window.position', list(position))
-            self.config.set('floating_window.size', list(size))
-            self.config.save()
+        try:
+            # Stop data fetcher first to prevent new requests
+            if hasattr(self, 'data_fetcher'):
+                self.logger.info("Stopping data fetcher...")
+                self.data_fetcher.stop()
             
-            self.floating_window.cleanup()
-            self.floating_window.Destroy()
-        
-        # Stop tray icon rotation
-        if hasattr(self, 'tray_icon'):
-            self.tray_icon.stop_rotation()
-            self.tray_icon.RemoveIcon()
-            self.tray_icon.Destroy()
-        
-        # Stop data fetcher
-        if hasattr(self, 'data_fetcher'):
-            self.data_fetcher.stop()
-        
-        # Close API adapters
-        if hasattr(self, 'primary_adapter'):
-            self.primary_adapter.close()
-        
-        for adapter in getattr(self, 'backup_adapters', []):
-            adapter.close()
-        
-        # Close detail window
-        if self.detail_window:
-            self.detail_window.Destroy()
+            # Stop tray icon rotation
+            if hasattr(self, 'tray_icon'):
+                self.logger.info("Stopping tray icon rotation...")
+                self.tray_icon.stop_rotation()
+                self.tray_icon.RemoveIcon()
+            
+            # Stop and cleanup floating window
+            if hasattr(self, 'floating_window') and self.floating_window:
+                self.logger.info("Cleaning up floating window...")
+                # Save position
+                position = self.floating_window.get_position_config()
+                size = self.floating_window.get_size_config()
+                self.config.set('floating_window.position', list(position))
+                self.config.set('floating_window.size', list(size))
+                self.config.save()
+                
+                self.floating_window.cleanup()
+                self.floating_window.Destroy()
+            
+            # Destroy tray icon
+            if hasattr(self, 'tray_icon'):
+                self.logger.info("Destroying tray icon...")
+                self.tray_icon.Destroy()
+            
+            # Close API adapters
+            if hasattr(self, 'primary_adapter') and self.primary_adapter is not None:
+                self.logger.info("Closing primary adapter...")
+                self.primary_adapter.close()
+            
+            if hasattr(self, 'backup_adapters'):
+                self.logger.info("Closing backup adapters...")
+                for adapter in getattr(self, 'backup_adapters', []):
+                    try:
+                        if adapter is not None:
+                            adapter.close()
+                    except Exception as e:
+                        self.logger.error(f"Error closing adapter: {e}")
+            
+            # Close detail window
+            if self.detail_window:
+                self.logger.info("Destroying detail window...")
+                self.detail_window.Destroy()
+                
+        except Exception as e:
+            self.logger.error(f"Error during shutdown: {e}", exc_info=True)
         
         self.logger.info("=" * 60)
         self.logger.info("ETF Monitor Stopped")
@@ -439,6 +483,32 @@ class ETFMonitorApp(wx.App):
         Returns:
             Exit code
         """
-        self._shutdown()
+        # 确保所有资源都被清理
+        try:
+            # 清理所有可能的定时器
+            wx.Yield()  # 处理所有待处理的事件
+            
+            # 关闭所有HTTP客户端
+            if hasattr(self, 'primary_adapter') and self.primary_adapter is not None:
+                try:
+                    self.primary_adapter.close()
+                except:
+                    pass
+            
+            if hasattr(self, 'backup_adapters'):
+                for adapter in getattr(self, 'backup_adapters', []):
+                    try:
+                        if adapter is not None:
+                            adapter.close()
+                    except:
+                        pass
+            
+            # 关闭所有HTTP连接
+            import gc
+            gc.collect()
+            
+        except Exception as e:
+            self.logger.error(f"Error in OnExit: {e}")
+        
         return 0
 

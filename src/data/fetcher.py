@@ -173,7 +173,7 @@ class DataFetcher:
                     # 闭市后：停止API调用，等待60秒后再检查
                     wait_interval = 60
                     trading_status = get_next_trading_time()
-                    self._logger.debug(f"闭市状态: {trading_status}")
+                    self._logger.info(f"[闭市检测] {trading_status}，停止API调用，等待{wait_interval}秒")
                     
                     # 闭市后不调用 _fetch_all_quotes()，直接等待
                     if self._stop_event.wait(timeout=wait_interval):
@@ -236,9 +236,15 @@ class DataFetcher:
         # Invoke callback if data was fetched successfully
         if quotes and self._data_callback:
             try:
+                self._logger.info(
+                    f"[数据回调] 成功获取 {len(quotes)} 个ETF数据，"
+                    f"其中 {len(changed_codes)} 个有变化"
+                )
+                if changed_codes:
+                    self._logger.info(f"[数据回调] 变化的ETF: {', '.join(changed_codes)}")
                 self._data_callback(quotes, changed_codes)
             except Exception as e:
-                self._logger.error(f"Error in data callback: {e}")
+                self._logger.error(f"[数据回调] 回调函数执行异常: {e}")
     
     def _fetch_single_quote(self, code: str) -> Optional[ETFQuote]:
         """
@@ -270,7 +276,15 @@ class DataFetcher:
                     time.sleep(self._retry_interval)
                     
             except Exception as e:
-                self._logger.debug(f"Attempt {attempt + 1} failed for {code}: {e}")
+                # 减少403错误的日志频率
+                if '403' in str(e):
+                    if not hasattr(self, '_last_403_log') or \
+                       time.time() - self._last_403_log > 60:  # 1分钟记录一次
+                        self._logger.debug(f"Attempt {attempt + 1} failed for {code}: {e}")
+                        self._last_403_log = time.time()
+                else:
+                    self._logger.debug(f"Attempt {attempt + 1} failed for {code}: {e}")
+                    
                 if attempt < self._retry_count:
                     time.sleep(self._retry_interval)
         
@@ -301,9 +315,13 @@ class DataFetcher:
                 )
                 self._switch_to_next_backup()
             else:
-                self._logger.error(
-                    f"All adapters exhausted, staying with current adapter"
-                )
+                # 减少日志频率，避免刷屏
+                if not hasattr(self, '_last_all_exhausted_log') or \
+                   time.time() - self._last_all_exhausted_log > 300:  # 5分钟记录一次
+                    self._logger.error(
+                        f"All adapters exhausted, staying with current adapter"
+                    )
+                    self._last_all_exhausted_log = time.time()
     
     def _switch_to_next_backup(self) -> None:
         """
@@ -312,26 +330,29 @@ class DataFetcher:
         Priority order: Primary -> Backup[0] -> Backup[1] -> Backup[2]
         """
         if not self._backup_adapters:
-            self._logger.error("No backup adapters available")
+            self._logger.error("[接口切换] 无备用接口可用")
             return
         
         # Increment to next backup adapter
+        old_index = self._current_adapter_index
         self._current_adapter_index += 1
         
         # Ensure we don't exceed available backups
         if self._current_adapter_index >= len(self._backup_adapters):
             self._current_adapter_index = len(self._backup_adapters) - 1
-            self._logger.warning("Already at last backup adapter")
+            self._logger.warning("[接口切换] 已使用最后一个备用接口，无法继续切换")
             return
         
         # Switch to next backup
+        old_adapter_name = self._current_adapter.__class__.__name__
         self._current_adapter = self._backup_adapters[self._current_adapter_index]
         self._last_failover_time = time.time()
         self._consecutive_failures = 0
         
         adapter_name = self._current_adapter.__class__.__name__
         self._logger.warning(
-            f"Switched to backup API [{self._current_adapter_index}]: {adapter_name}"
+            f"[接口切换] {old_adapter_name} → {adapter_name} "
+            f"(优先级: {old_index} → {self._current_adapter_index})"
         )
     
     def _try_switch_to_higher_priority(self) -> None:
@@ -342,7 +363,8 @@ class DataFetcher:
         Backup[2] -> Backup[1] -> Backup[0] -> Primary
         """
         # Only try every 5 minutes
-        if time.time() - self._last_failover_time < 300:
+        time_since_failover = time.time() - self._last_failover_time
+        if time_since_failover < 300:
             return
         
         if not self._etf_codes:
@@ -360,22 +382,27 @@ class DataFetcher:
             test_adapter = self._primary_adapter
             adapter_type = "primary"
         
+        test_adapter_name = test_adapter.__class__.__name__
+        self._logger.info(f"[接口恢复] 尝试切回上一级接口 {adapter_type}[{target_index}]: {test_adapter_name}")
+        
         try:
             quote = test_adapter.fetch_quote(test_code)
             if quote:
                 # Higher priority adapter is working again
+                old_adapter_name = self._current_adapter.__class__.__name__
                 self._current_adapter = test_adapter
                 self._current_adapter_index = target_index
                 self._last_failover_time = time.time()
                 
-                adapter_name = test_adapter.__class__.__name__
                 self._logger.info(
-                    f"Switched back to {adapter_type} API [{target_index}]: {adapter_name}"
+                    f"[接口恢复] 成功切回 {adapter_type}[{target_index}]: "
+                    f"{old_adapter_name} → {test_adapter_name}"
                 )
         except Exception as e:
             # Higher priority adapter still failing, will try again later
-            self._logger.debug(
-                f"Higher priority adapter [{target_index}] still failing: {e}"
+            self._logger.info(
+                f"[接口恢复] 上一级接口 {adapter_type}[{target_index}] 仍不可用: {e}，"
+                f"将在5分钟后重试"
             )
     
     def get_status(self) -> dict:

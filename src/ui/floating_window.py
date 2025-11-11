@@ -64,10 +64,10 @@ class FloatingWindow(wx.Frame):
         super().__init__(
             parent,
             title="ETF Monitor",
-            size=(self._window_width, self._window_height),
+            size=wx.Size(self._window_width, self._window_height),
             style=style
         )
-        self.SetMinSize((self._min_width, self._min_height))
+        self.SetMinSize(wx.Size(self._min_width, self._min_height))
         
         self._logger = get_logger(__name__)
         self._font_size = font_size
@@ -172,7 +172,7 @@ class FloatingWindow(wx.Frame):
         self._text.SetForegroundColour(wx.Colour(0, 0, 0))
 
         # 面板填满整个窗口
-        self._panel.SetMinSize((self._min_width, self._min_height))
+        self._panel.SetMinSize(wx.Size(self._min_width, self._min_height))
         frame_sizer = wx.BoxSizer(wx.VERTICAL)
         frame_sizer.Add(self._panel, 1, wx.EXPAND)
         self.SetSizer(frame_sizer)
@@ -337,7 +337,7 @@ class FloatingWindow(wx.Frame):
         """应用窗口尺寸并刷新布局。"""
         width = max(self._min_width, int(width))
         height = max(self._min_height, int(height))
-        self.SetSize((width, height))
+        self.SetSize(wx.Size(width, height))
         self._sync_window_size()
         # 更新字体大小
         self._update_font_size()
@@ -347,43 +347,37 @@ class FloatingWindow(wx.Frame):
         if reposition:
             self._position_bottom_right()
 
-    def _sync_window_size(self) -> None:
-        """同步内部记录的窗口尺寸。"""
-        size = self.GetSize()
-        self._window_width = size.GetWidth()
-        self._window_height = size.GetHeight()
-
-    def _reset_size(self) -> None:
-        """重置为默认尺寸并重新定位。"""
-        target_width, target_height = self._base_default_size
-        self._apply_size(target_width, target_height, reposition=True)
-
-    def _position_bottom_right(self):
-        """自动定位到屏幕右下角。"""
-        try:
-            self._sync_window_size()
-            # 获取主显示器
-            display = wx.Display(0)
-            
-            # 获取工作区域（排除任务栏）
-            client_area = display.GetClientArea()
-            
-            # 计算右下角位置（留 10px 边距）
-            margin = 10
-            current_size = self.GetSize()
-            width = current_size.GetWidth()
-            height = current_size.GetHeight()
-            x = client_area.GetRight() - width - margin
-            y = client_area.GetBottom() - height - margin
-            
-            self.SetPosition((x, y))
-            self._logger.info(f"Window positioned at ({x}, {y})")
-            
-        except Exception as e:
-            self._logger.error(f"Failed to position window: {e}")
-            # 出错则使用默认位置
-            self.SetPosition((100, 100))
+    def _reset_position(self):
+        """重置窗口到右下角。"""
+        self._position_bottom_right()
+        self._logger.info("Window position reset to bottom-right corner")
     
+    def _position_bottom_right(self):
+        """定位窗口到屏幕右下角（时钟上方）。"""
+        screen_width, screen_height = wx.GetDisplaySize()
+        width, height = self.GetSize()
+        
+        # 计算右下角坐标（留出边距）
+        x = screen_width - width - 10
+        y = screen_height - height - 10
+        
+        self.SetPosition(wx.Point(int(x), int(y)))
+    
+    def _reset_size(self):
+        """重置窗口尺寸。"""
+        width, height = self._base_default_size
+        self.SetSize(wx.Size(width, height))
+        self._window_width = width
+        self._window_height = height
+        self._sync_window_size()
+        self._logger.info(f"Window size reset to {width}x{height}")
+    
+    def _sync_window_size(self):
+        """同步窗口尺寸到内部变量。"""
+        size = self.GetSize()
+        self._window_width = size.width
+        self._window_height = size.height
+
     def _ensure_always_on_top(self):
         """确保窗口始终置顶（使用多种方法组合）。"""
         try:
@@ -433,7 +427,7 @@ class FloatingWindow(wx.Frame):
         # 监听窗口显示/隐藏事件，防止意外隐藏
         self.Bind(wx.EVT_SHOW, self._on_show_event)
     
-    def update_data(self, etf_data: Dict[str, ETFQuote], changed_codes: list = None):
+    def update_data(self, etf_data: Dict[str, ETFQuote], changed_codes: Optional[list] = None):
         """
         更新 ETF 数据。
         
@@ -447,35 +441,38 @@ class FloatingWindow(wx.Frame):
         # 如果提供了变化列表，只轮播有变化的ETF
         if changed_codes:
             self._changed_etf_codes = [code for code in changed_codes if code in etf_data]
-            self._logger.debug(f"Changed ETFs: {len(self._changed_etf_codes)} of {len(self._etf_codes)}")
+            self._logger.info(f"[智能轮播] 接收到 {len(self._etf_codes)} 个ETF，其中 {len(self._changed_etf_codes)} 个有变化")
+            if self._changed_etf_codes:
+                self._logger.info(f"[智能轮播] 有变化的ETF: {', '.join(self._changed_etf_codes)}")
         else:
             # 否则轮播所有ETF
             self._changed_etf_codes = list(etf_data.keys())
+            self._logger.debug(f"[智能轮播] 未提供变化列表，轮播所有 {len(self._changed_etf_codes)} 个ETF")
         
         # 如果当前轮播列表为空，回退到全部
         if not self._changed_etf_codes:
             self._changed_etf_codes = list(etf_data.keys())
+            self._logger.warning(f"[智能轮播] 无变化ETF，回退到轮播全部 {len(self._changed_etf_codes)} 个")
         
         # 标记数据已加载
         if not self._data_loaded and etf_data:
             self._data_loaded = True
-            self._timeout_timer.Stop()  # 停止超时检测
-            self._logger.info(f"Floating window data loaded successfully: {len(self._etf_codes)} ETFs")
-        
-        self._logger.debug(f"Floating window data updated: {len(self._etf_codes)} ETFs")
+            if self._timeout_timer is not None:
+                self._timeout_timer.Stop()  # 停止超时检测
+            self._logger.info(f"[数据加载] 悬浮窗首次数据加载成功: {len(self._etf_codes)} 个ETF")
         
         # 更新显示
         self._update_display()
     
     def start_rotation(self):
         """开始轮播。"""
-        if not self._rotation_timer.IsRunning():
+        if self._rotation_timer is not None and not self._rotation_timer.IsRunning():
             self._rotation_timer.Start(self._rotation_interval * 1000)
             self._logger.info(f"Rotation started: {self._rotation_interval}s interval")
     
     def stop_rotation(self):
         """停止轮播。"""
-        if self._rotation_timer.IsRunning():
+        if self._rotation_timer is not None and self._rotation_timer.IsRunning():
             self._rotation_timer.Stop()
             self._logger.info("Rotation stopped")
     
@@ -485,10 +482,14 @@ class FloatingWindow(wx.Frame):
         
         # 闭市时停止轮播
         if not is_trading_time():
+            self._logger.debug(f"[轮播控制] 闭市时段，停止轮播")
             return
         
         if self._changed_etf_codes:
+            old_index = self._current_index
             self._current_index = (self._current_index + 1) % len(self._changed_etf_codes)
+            code = self._changed_etf_codes[self._current_index]
+            self._logger.debug(f"[轮播控制] 索引 {old_index} → {self._current_index}，显示 {code}")
             self._update_display()
     
     def _on_timeout_check(self, event):
@@ -509,7 +510,7 @@ class FloatingWindow(wx.Frame):
             
             # 检查1: 如果窗口不可见且不是用户主动隐藏的，自动恢复显示
             if not self.IsShown() and not self._user_hidden:
-                self._logger.warning("Window unexpectedly hidden, restoring visibility")
+                self._logger.warning("[窗口守护] 窗口意外隐藏，正在恢复显示")
                 self.Show(True)
                 self._ensure_always_on_top()
             
@@ -532,21 +533,24 @@ class FloatingWindow(wx.Frame):
                         self.SetWindowStyle(current_style & ~wx.STAY_ON_TOP)
                         self.SetWindowStyle(current_style | wx.STAY_ON_TOP)
                         self.Raise()
+                        self._logger.debug("[窗口守护] 强制刷新STAY_ON_TOP样式")
                 
         except Exception as e:
-            self._logger.error(f"Error in visibility guard: {e}")
+            self._logger.error(f"[窗口守护] 守护定时器异常: {e}")
     
     def _update_display(self):
         """更新显示内容。"""
         # 在开头添加闭市检测
-        from ..utils.helpers import is_trading_time
+        from ..utils.helpers import is_trading_time, get_next_trading_time
         
         if not is_trading_time():
             # 闭市时显示固定信息，不轮播
+            trading_status = get_next_trading_time()
             self._text.SetLabel("已收盘")
             self._panel.SetBackgroundColour(wx.Colour(200, 200, 200))
             self._text.SetForegroundColour(wx.Colour(80, 80, 80))
             self._panel.Refresh()
+            self._logger.debug(f"[显示更新] 闭市状态: {trading_status}")
             return
         
         if not self._changed_etf_codes or not self._etf_data:
@@ -643,6 +647,8 @@ class FloatingWindow(wx.Frame):
         if self._dragging or self._resizing:
             self._dragging = False
             self._resizing = False
+            self._drag_start_pos = None
+            self._window_start_pos = None
             self._resize_direction = ''
             self._resize_start_pos = None
             self._window_start_size = None
@@ -656,73 +662,87 @@ class FloatingWindow(wx.Frame):
         """鼠标移动 - 拖动或缩放窗口。"""
         client_pos = self._get_client_position(event)
         
-        if self._resizing and self._window_start_size:
+        if self._resizing and self._window_start_size and self._resize_start_pos:
             # 调整大小模式
             current_screen_pos = self._get_screen_position(event)
-            delta_x = current_screen_pos.x - self._resize_start_pos.x
-            delta_y = current_screen_pos.y - self._resize_start_pos.y
+            if current_screen_pos and self._resize_start_pos:
+                delta_x = current_screen_pos.x - self._resize_start_pos.x
+                delta_y = current_screen_pos.y - self._resize_start_pos.y
+                
+                # 获取起始尺寸和位置
+                start_width, start_height = self._window_start_size
+                start_x, start_y = self._window_start_pos_for_resize or (0, 0)
+                
+                # 根据调整方向计算新尺寸和位置
+                new_width = start_width
+                new_height = start_height
+                new_x = start_x
+                new_y = start_y
+                
+                # 水平调整
+                if 'E' in self._resize_direction:
+                    new_width = max(self._min_width, start_width + delta_x)
+                elif 'W' in self._resize_direction:
+                    new_width = max(self._min_width, start_width - delta_x)
+                    new_x = start_x + delta_x
+                
+                # 垂直调整
+                if 'S' in self._resize_direction:
+                    new_height = max(self._min_height, start_height + delta_y)
+                elif 'N' in self._resize_direction:
+                    new_height = max(self._min_height, start_height - delta_y)
+                    new_y = start_y + delta_y
+                
+                # 应用新尺寸和位置
+                self.SetSize(wx.Size(int(new_width), int(new_height)))
+                self.SetPosition(wx.Point(int(new_x), int(new_y)))
+                
+                # 更新内部尺寸变量
+                self._window_width = int(new_width)
+                self._window_height = int(new_height)
+                
+                # 重新计算字体大小和内边距
+                self._font_size = self._calculate_font_size(self._window_height)
+                self._current_padding = max(2, min(10, int(self._window_height * 0.15)))
+                
+                # 更新字体
+                font = wx.Font(
+                    self._font_size,
+                    wx.FONTFAMILY_DEFAULT,
+                    wx.FONTSTYLE_NORMAL,
+                    wx.FONTWEIGHT_BOLD
+                )
+                self._text.SetFont(font)
+                
+                # 更新布局
+                self._panel.Layout()
+                self.Layout()
             
-            # 获取起始尺寸和位置
-            start_width = self._window_start_size.GetWidth()
-            start_height = self._window_start_size.GetHeight()
-            if self._window_start_pos_for_resize is None:
-                self._window_start_pos_for_resize = self.GetPosition()
-            start_x = self._window_start_pos_for_resize.x
-            start_y = self._window_start_pos_for_resize.y
-            
-            new_width = start_width
-            new_height = start_height
-            new_x = start_x
-            new_y = start_y
-            
-            # 根据方向计算新尺寸和位置
-            direction = self._resize_direction
-            if not direction:
-                direction = self._get_resize_direction(client_pos)
-            
-            # 水平方向
-            if 'E' in direction:
-                new_width = start_width + delta_x
-            elif 'W' in direction:
-                new_width = start_width - delta_x
-                new_x = start_x + delta_x
-            
-            # 垂直方向
-            if 'S' in direction:
-                new_height = start_height + delta_y
-            elif 'N' in direction:
-                new_height = start_height - delta_y
-                new_y = start_y + delta_y
-            
-            # 应用最小尺寸限制
-            new_width = max(self._min_width, int(new_width))
-            new_height = max(self._min_height, int(new_height))
-            
-            # 如果从左边或上边调整，需要调整位置以保持对侧不动
-            if 'W' in direction:
-                new_x = start_x + (start_width - new_width)
-            if 'N' in direction:
-                new_y = start_y + (start_height - new_height)
-            
-            # 应用新尺寸和位置
-            self._set_cursor_for_direction(direction)
-            self.SetPosition((int(new_x), int(new_y)))
-            self._apply_size(new_width, new_height)
-            
-        elif self._dragging:
+        elif self._dragging and self._drag_start_pos and self._window_start_pos:
             # 拖动模式
             current_screen_pos = self._get_screen_position(event)
-            delta_x = current_screen_pos.x - self._drag_start_pos.x
-            delta_y = current_screen_pos.y - self._drag_start_pos.y
-            new_x = self._window_start_pos.x + delta_x
-            new_y = self._window_start_pos.y + delta_y
-            self.Move(new_x, new_y)
+            if current_screen_pos and self._drag_start_pos:
+                delta_x = current_screen_pos.x - self._drag_start_pos.x
+                delta_y = current_screen_pos.y - self._drag_start_pos.y
+                
+                new_x = self._window_start_pos.x + delta_x
+                new_y = self._window_start_pos.y + delta_y
+                
+                # 限制窗口位置在屏幕范围内
+                screen_width, screen_height = wx.GetDisplaySize()
+                window_width, window_height = self.GetSize()
+                
+                new_x = max(0, min(new_x, screen_width - window_width))
+                new_y = max(0, min(new_y, screen_height - window_height))
+                
+                self.SetPosition(wx.Point(int(new_x), int(new_y)))
+        
         else:
-            # 更新光标
+            # 正常鼠标移动 - 显示相应光标
             direction = self._get_resize_direction(client_pos)
             if direction:
                 self._set_cursor_for_direction(direction)
-            elif not self._dragging:
+            else:
                 self._set_cursor(wx.CURSOR_ARROW)
         
         event.Skip()
@@ -848,7 +868,7 @@ class FloatingWindow(wx.Frame):
         
         if rotation_interval is not None and rotation_interval != self._rotation_interval:
             self._rotation_interval = rotation_interval
-            if self._rotation_timer.IsRunning():
+            if self._rotation_timer is not None and self._rotation_timer.IsRunning():
                 self.stop_rotation()
                 self.start_rotation()
     
@@ -882,19 +902,39 @@ class FloatingWindow(wx.Frame):
     def pause_guard(self):
         """暂停窗口守护（用于显示菜单等场景，避免抢占焦点）。"""
         self._guard_paused = True
-        self._logger.debug("Window guard paused")
+        self._logger.info("[窗口守护] 守护已暂停（托盘菜单打开）")
     
     def resume_guard(self):
         """恢复窗口守护。"""
         self._guard_paused = False
-        self._logger.debug("Window guard resumed")
+        self._logger.info("[窗口守护] 守护已恢复（托盘菜单关闭）")
     
     def cleanup(self):
         """清理资源。"""
         self.stop_rotation()
-        if self._timeout_timer.IsRunning():
+        if self._timeout_timer is not None and self._timeout_timer.IsRunning():
             self._timeout_timer.Stop()
-        if self._visibility_guard_timer.IsRunning():
+        if self._visibility_guard_timer is not None and self._visibility_guard_timer.IsRunning():
             self._visibility_guard_timer.Stop()
         if self.HasCapture():
             self.ReleaseMouse()
+        
+        # 清理所有定时器引用
+        self._rotation_timer = None
+        self._timeout_timer = None
+        self._visibility_guard_timer = None
+    
+    def Destroy(self):
+        """重写Destroy方法确保资源被正确释放。"""
+        try:
+            # 先清理所有定时器
+            self.cleanup()
+            
+            # 停止所有可能仍在运行的定时器
+            import wx
+            wx.Yield()  # 处理所有待处理的事件
+        except:
+            pass
+            
+        # 调用父类的Destroy方法
+        return super().Destroy()

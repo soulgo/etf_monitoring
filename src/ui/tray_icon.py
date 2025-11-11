@@ -165,7 +165,7 @@ class ETFTrayIcon(wx.adv.TaskBarIcon):
         item = menu.Append(wx.ID_ANY, "关于")
         menu.Bind(wx.EVT_MENU, self._on_about, item)
         
-        # Exit
+        # Exit - 使用wx.ID_EXIT确保只触发一次
         item = menu.Append(wx.ID_EXIT, "退出")
         menu.Bind(wx.EVT_MENU, self._on_exit, item)
         
@@ -352,7 +352,7 @@ class ETFTrayIcon(wx.adv.TaskBarIcon):
             self._on_about_callback()
     
     def _on_exit(self, event) -> None:
-        """Handle exit menu item."""
+        """Handle exit event."""
         if self._on_exit_callback:
             self._on_exit_callback()
     

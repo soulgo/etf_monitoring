@@ -41,13 +41,13 @@ class AboutDialog(wx.Dialog):
         sizer.Add(app_name, 0, wx.ALL | wx.ALIGN_CENTER, 10)
         
         # Version
-        version = wx.StaticText(panel, label="版本 1.0.0")
+        version = wx.StaticText(panel, label="版本 1.2.0")
         sizer.Add(version, 0, wx.ALL | wx.ALIGN_CENTER, 5)
         
         # Description
         desc = wx.StaticText(
             panel,
-            label="实时监控 ETF 价格和涨跌幅\n通过系统托盘轮播显示行情信息"
+            label="实时监控 ETF 价格和涨跌幅\n智能轮播 · 四接口架构 · 闭市智能控制"
         )
         desc.Wrap(350)
         sizer.Add(desc, 0, wx.ALL | wx.ALIGN_CENTER, 10)

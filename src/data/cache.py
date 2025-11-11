@@ -57,8 +57,12 @@ class CacheManager:
             changed = self._cache[code].update(quote)
             
             if changed:
+                self._logger.info(
+                    f"[缓存更新] {code} 价格变化: {quote.name} {quote.price} ({quote.change_percent:+.2f}%)"
+                )
+            else:
                 self._logger.debug(
-                    f"Cache updated for {code}: {quote.price} ({quote.change_percent:+.2f}%)"
+                    f"[缓存更新] {code} 无变化: {quote.price} ({quote.change_percent:+.2f}%)"
                 )
             
             return changed

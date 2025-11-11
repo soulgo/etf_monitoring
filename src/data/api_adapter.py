@@ -95,10 +95,21 @@ class EastMoneyAdapter(QuoteAPIAdapter):
                 'fields': 'f57,f58,f43,f44,f45,f46,f60,f152'
             }
             
-            # Send request
-            self.logger.debug(f"Fetching {code} from EastMoney")
-            response = self.client.get(url, params=params)
-            response.raise_for_status()
+            # Send request with retry logic for 502 errors
+            max_retries = 2
+            for attempt in range(max_retries):
+                try:
+                    self.logger.debug(f"[EastMoney] 请求 {code} (attempt {attempt + 1})")
+                    response = self.client.get(url, params=params)
+                    response.raise_for_status()
+                    break  # Success, exit retry loop
+                except httpx.HTTPStatusError as e:
+                    if e.response.status_code == 502 and attempt < max_retries - 1:
+                        self.logger.warning(f"[EastMoney] 502错误，重试 {attempt + 1}/{max_retries - 1}")
+                        time.sleep(0.5)  # 短暂延迟后重试
+                        continue
+                    else:
+                        raise  # 非502错误或最后一次尝试，抛出异常
             
             # Parse response
             data = response.json()
@@ -159,19 +170,19 @@ class EastMoneyAdapter(QuoteAPIAdapter):
                 timestamp=time.time()
             )
             
-            self.logger.debug(f"Successfully fetched {code}: {price} ({change_percent}%)")
+            self.logger.info(f"[EastMoney] 成功获取 {code}: {name} {price} ({change_percent:+.2f}%)")
             return quote
             
         except httpx.TimeoutException:
-            self.logger.error(f"Timeout fetching {code} from EastMoney")
+            self.logger.error(f"[EastMoney] 请求超时 {code}")
             return None
             
         except httpx.HTTPError as e:
-            self.logger.error(f"HTTP error fetching {code}: {e}")
+            self.logger.error(f"[EastMoney] HTTP错误 {code}: {e}")
             return None
             
         except Exception as e:
-            self.logger.error(f"Error fetching {code} from EastMoney: {e}")
+            self.logger.error(f"[EastMoney] 获取失败 {code}: {e}")
             return None
     
     def _parse_update_time(self, time_str: Optional[str]) -> str:
@@ -228,9 +239,13 @@ class SinaAdapter(QuoteAPIAdapter):
             # Build request URL
             url = f"{self.base_url}{symbol}"
             
-            # Send request
-            self.logger.debug(f"Fetching {code} from Sina")
-            response = self.client.get(url)
+            # Send request with custom headers to avoid 403
+            self.logger.debug(f"[Sina] 请求 {code}")
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Referer': 'https://finance.sina.com.cn/'
+            }
+            response = self.client.get(url, headers=headers)
             response.raise_for_status()
             
             # Parse response
@@ -309,19 +324,19 @@ class SinaAdapter(QuoteAPIAdapter):
                 timestamp=time.time()
             )
             
-            self.logger.debug(f"Successfully fetched {code}: {price_f} ({change_percent:.2f}%)")
+            self.logger.info(f"[Sina] 成功获取 {code}: {name} {price_f} ({change_percent:+.2f}%)")
             return quote
             
         except httpx.TimeoutException:
-            self.logger.error(f"Timeout fetching {code} from Sina")
+            self.logger.error(f"[Sina] 请求超时 {code}")
             return None
             
         except httpx.HTTPError as e:
-            self.logger.error(f"HTTP error fetching {code}: {e}")
+            self.logger.error(f"[Sina] HTTP错误 {code}: {e}")
             return None
             
         except Exception as e:
-            self.logger.error(f"Error fetching {code} from Sina: {e}")
+            self.logger.error(f"[Sina] 获取失败 {code}: {e}")
             return None
 
 
@@ -352,7 +367,7 @@ class TencentAdapter(QuoteAPIAdapter):
             url = f"{self.base_url}{symbol}"
             
             # Send request
-            self.logger.debug(f"Fetching {code} from Tencent")
+            self.logger.debug(f"[Tencent] 请求 {code}")
             response = self.client.get(url)
             response.raise_for_status()
             
@@ -428,19 +443,19 @@ class TencentAdapter(QuoteAPIAdapter):
                 timestamp=time.time()
             )
             
-            self.logger.debug(f"Successfully fetched {code}: {price} ({change_percent}%)")
+            self.logger.info(f"[Tencent] 成功获取 {code}: {name} {price} ({change_percent:+.2f}%)")
             return quote
             
         except httpx.TimeoutException:
-            self.logger.error(f"Timeout fetching {code} from Tencent")
+            self.logger.error(f"[Tencent] 请求超时 {code}")
             return None
             
         except httpx.HTTPError as e:
-            self.logger.error(f"HTTP error fetching {code}: {e}")
+            self.logger.error(f"[Tencent] HTTP错误 {code}: {e}")
             return None
             
         except Exception as e:
-            self.logger.error(f"Error fetching {code} from Tencent: {e}")
+            self.logger.error(f"[Tencent] 获取失败 {code}: {e}")
             return None
 
 
@@ -496,7 +511,7 @@ class XueqiuAdapter(QuoteAPIAdapter):
             }
             
             # Send request
-            self.logger.debug(f"Fetching {code} from Xueqiu")
+            self.logger.debug(f"[Xueqiu] 请求 {code}")
             response = self.client.get(url, params=params)
             response.raise_for_status()
             
@@ -553,19 +568,19 @@ class XueqiuAdapter(QuoteAPIAdapter):
                 timestamp=time.time()
             )
             
-            self.logger.debug(f"Successfully fetched {code}: {price_f} ({change_percent:.2f}%)")
+            self.logger.info(f"[Xueqiu] 成功获取 {code}: {name} {price_f} ({change_percent:+.2f}%)")
             return quote
             
         except httpx.TimeoutException:
-            self.logger.error(f"Timeout fetching {code} from Xueqiu")
+            self.logger.error(f"[Xueqiu] 请求超时 {code}")
             return None
             
         except httpx.HTTPError as e:
-            self.logger.error(f"HTTP error fetching {code}: {e}")
+            self.logger.error(f"[Xueqiu] HTTP错误 {code}: {e}")
             return None
             
         except Exception as e:
-            self.logger.error(f"Error fetching {code} from Xueqiu: {e}")
+            self.logger.error(f"[Xueqiu] 获取失败 {code}: {e}")
             return None
 
 
