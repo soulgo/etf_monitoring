@@ -125,7 +125,7 @@ python main.py
 ### 托盘菜单
 
 - 当前版本托盘菜单仅包含：`退出`
-- 其他操作（设置、查看详情、刷新等）暂未通过托盘菜单提供，相关回调接口保留，后续版本可能启用。
+- 其他操作（设置、查看详情、刷新、关于、暂停、开机自启）已移除。
 
 ### 托盘 Tooltip 显示
 
@@ -338,11 +338,8 @@ etf_monitoring/
 - 支持通过 `enabled` 字段动态禁用某个接口
 
 #### 3. UI 模块 (`src/ui/`)
-- **tray_icon.py**：系统托盘图标，Tooltip 轮播显示
+- **tray_icon.py**：系统托盘图标，Tooltip 轮播显示（菜单仅退出）
 - **floating_window.py**：悬浮窗，支持拖拽、缩放、字体自适应
-- **settings_dialog.py**：设置界面，ETF 管理和参数配置
-- **detail_window.py**：详情窗口，显示所有 ETF 列表
-- **about_dialog.py**：关于对话框，版本信息
 
 **悬浮窗核心特性**：
 - 8 方向调整：4 边 + 4 角
@@ -359,7 +356,6 @@ etf_monitoring/
 #### 4. 工具模块 (`src/utils/`)
 - **logger.py**：日志工具，按天轮转，分级记录
 - **helpers.py**：辅助函数（格式化、验证等）
-- **events.py**：wxPython 自定义事件
 
 ### 数据接口
 
@@ -805,7 +801,7 @@ Remove-Item -Recurse -Force "$env:APPDATA\ETF Monitor"
 
 ### Q3: 数据延迟有多大？
 
-**A**: 默认 5 秒刷新一次，实际延迟约 5-10 秒。可在设置中调整刷新间隔（最快 3 秒）。
+**A**: 默认 5 秒刷新一次，实际延迟约 5-10 秒。可通过编辑 `config.json` 的 `refresh_interval` 调整刷新间隔（单位：秒）。
 
 ### Q4: 悬浮窗无法拖动怎么办？
 
@@ -841,7 +837,7 @@ Remove-Item -Recurse -Force "$env:APPDATA\ETF Monitor"
 
 ### Q9: 支持开机自启吗？
 
-**A**: 支持。在设置界面勾选"开机自动启动"即可。
+**A**: 当前版本不提供图形化开机自启设置；可在配置中调整或通过系统设置实现。
 
 ### Q10: 数据来源可靠吗？
 
@@ -854,7 +850,7 @@ Remove-Item -Recurse -Force "$env:APPDATA\ETF Monitor"
 
 ### Q11: 如何查看所有 ETF？
 
-**A**: 右键托盘图标 → "查看所有基金"，会打开详情窗口显示完整列表。
+**A**: 当前版本未提供详情窗口。请通过悬浮窗轮播与托盘 Tooltip 获取信息。
 
 ### Q12: 程序崩溃了怎么办？
 

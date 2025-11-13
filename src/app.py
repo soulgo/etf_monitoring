@@ -13,7 +13,6 @@ from .data.api_adapter import APIAdapterFactory
 from .data.fetcher import DataFetcher
 from .data.cache import CacheManager
 from .ui.tray_icon import ETFTrayIcon
-from .ui.settings_dialog import SettingsDialog
 from .ui.floating_window import FloatingWindow
 from .utils.logger import setup_logger, get_logger
 
@@ -149,9 +148,7 @@ class ETFMonitorApp(wx.App):
         
         self.logger.info("Tray icon initialized")
         
-        # Initialize windows (but don't show)
-        self.detail_window = None
-        self.settings_dialog = None
+        # Initialize windows (removed menu-driven components)
         
         # Initialize floating window
         floating_config = self.config.get('floating_window', {})
@@ -237,115 +234,6 @@ class ETFMonitorApp(wx.App):
         if self.detail_window and self.detail_window.IsShown():
             self.detail_window.update_data(etf_data)
     
-    def _on_show_settings(self) -> None:
-        """Show settings dialog."""
-        if self.settings_dialog and self.settings_dialog.IsShown():
-            self.settings_dialog.Raise()
-            return
-        try:
-            self.settings_dialog = SettingsDialog(
-                None,
-                self.config,
-                fetch_name_callback=self._fetch_etf_name,
-                on_manual_refresh=self._on_manual_refresh,
-                on_pause_toggle=self._on_pause_toggle,
-                get_pause_state=lambda: getattr(self.data_fetcher, '_paused', False)
-            )
-        except Exception as e:
-            self.logger.error(f"Failed to load settings dialog: {e}", exc_info=True)
-            wx.MessageBox(
-                "设置窗口加载失败，请查看日志",
-                "加载失败",
-                wx.OK | wx.ICON_ERROR
-            )
-            return
-        
-        if self.settings_dialog.ShowModal() == wx.ID_OK:
-            # Configuration saved, reload and restart services
-            self.logger.info("Configuration updated, reloading...")
-            self._reload_configuration()
-        
-        self.settings_dialog.Destroy()
-        self.settings_dialog = None
-    
-    def _on_show_detail(self) -> None:
-        """Show detail window."""
-        try:
-            from .ui.detail_window import DetailWindow
-        except Exception as e:
-            self.logger.error(f"Failed to load detail window: {e}", exc_info=True)
-            wx.MessageBox(
-                "详情窗口模块加载失败，请查看日志",
-                "加载失败",
-                wx.OK | wx.ICON_ERROR
-            )
-            return
-        if self.detail_window is None:
-            self.detail_window = DetailWindow(None)
-            self.detail_window.set_on_refresh(self._on_manual_refresh)
-        
-        # Update with current data
-        etf_data = self.cache_manager.get_all()
-        self.detail_window.update_data(etf_data)
-        
-        self.detail_window.Show()
-        self.detail_window.Raise()
-    
-    def _on_show_about(self) -> None:
-        """Show about dialog."""
-        try:
-            from .ui.about_dialog import AboutDialog
-            about = AboutDialog(None)
-            about.ShowModal()
-            about.Destroy()
-        except Exception as e:
-            self.logger.error(f"Failed to load about dialog: {e}", exc_info=True)
-            wx.MessageBox(
-                "关于窗口模块加载失败，请查看日志",
-                "加载失败",
-                wx.OK | wx.ICON_ERROR
-            )
-    
-    def _on_manual_refresh(self) -> None:
-        """Trigger manual refresh."""
-        self.logger.info("Manual refresh triggered")
-        self.data_fetcher.trigger_refresh()
-    
-    def _on_pause_toggle(self, paused: bool) -> None:
-        """
-        Handle pause toggle.
-        
-        Args:
-            paused: True if pausing, False if resuming
-        """
-        if paused:
-            self.data_fetcher.pause()
-            self.logger.info("Data fetching paused")
-        else:
-            self.data_fetcher.resume()
-            self.logger.info("Data fetching resumed")
-        
-        self.tray_icon.set_paused(paused)
-    
-    def _on_auto_start_toggle(self) -> None:
-        """Toggle auto start setting."""
-        current = self.config.get('auto_start', False)
-        new_value = not current
-        
-        self.config.set('auto_start', new_value)
-        self.config.save()
-        
-        # TODO: Update Windows registry for auto-start
-        # This would require winreg module on Windows
-        
-        self.logger.info(f"Auto start set to: {new_value}")
-        
-        wx.MessageBox(
-            f"开机自启已{'启用' if new_value else '禁用'}\n"
-            "注：需要以管理员权限运行才能修改注册表",
-            "设置已更新",
-            wx.OK | wx.ICON_INFORMATION
-        )
     
     def _on_tray_menu_open(self) -> None:
         """Handle tray menu open - pause floating window guard."""
@@ -513,10 +401,7 @@ class ETFMonitorApp(wx.App):
                     except Exception as e:
                         self.logger.error(f"Error closing adapter: {e}")
             
-            # Close detail window
-            if self.detail_window:
-                self.logger.info("Destroying detail window...")
-                self.detail_window.Destroy()
+            # Close detail window (removed)
                 
         except Exception as e:
             self.logger.error(f"Error during shutdown: {e}", exc_info=True)

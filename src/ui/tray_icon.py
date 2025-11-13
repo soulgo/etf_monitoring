@@ -67,16 +67,7 @@ class ETFTrayIcon(wx.adv.TaskBarIcon):
         self._rotation_event = threading.Event()
         self._stop_event = threading.Event()
         
-        # Pause state
-        self._paused = False
-        
         # Callbacks
-        self._on_settings_callback: Optional[Callable] = None
-        self._on_detail_callback: Optional[Callable] = None
-        self._on_about_callback: Optional[Callable] = None
-        self._on_refresh_callback: Optional[Callable] = None
-        self._on_pause_callback: Optional[Callable] = None
-        self._on_auto_start_callback: Optional[Callable] = None
         self._on_exit_callback: Optional[Callable] = None
         self._on_menu_open_callback: Optional[Callable] = None
         self._on_menu_close_callback: Optional[Callable] = None
@@ -268,52 +259,7 @@ class ETFTrayIcon(wx.adv.TaskBarIcon):
         self._rotation_mode = mode
         self._logger.info(f"Rotation settings updated: {mode} mode, {interval}s interval")
     
-    def set_paused(self, paused: bool) -> None:
-        """
-        Set pause state.
-        
-        Args:
-            paused: True to pause, False to resume
-        """
-        self._paused = paused
-    
     # Event handlers
-    
-    def _on_left_double_click(self, event) -> None:
-        """Handle left double-click (disabled)."""
-        return
-    
-    def _on_view_detail(self, event) -> None:
-        """Handle view detail menu item."""
-        if self._on_detail_callback:
-            self._on_detail_callback()
-    
-    def _on_settings(self, event) -> None:
-        """Handle settings menu item."""
-        if self._on_settings_callback:
-            self._on_settings_callback()
-    
-    def _on_refresh(self, event) -> None:
-        """Handle refresh menu item."""
-        if self._on_refresh_callback:
-            self._on_refresh_callback()
-    
-    def _on_pause(self, event) -> None:
-        """Handle pause menu item."""
-        self._paused = not self._paused
-        if self._on_pause_callback:
-            self._on_pause_callback(self._paused)
-    
-    def _on_auto_start(self, event) -> None:
-        """Handle auto start menu item."""
-        if self._on_auto_start_callback:
-            # Get current state and toggle
-            self._on_auto_start_callback()
-    
-    def _on_about(self, event) -> None:
-        """Handle about menu item."""
-        if self._on_about_callback:
-            self._on_about_callback()
     
     def _on_exit(self, event) -> None:
         """Handle exit event."""
@@ -322,30 +268,6 @@ class ETFTrayIcon(wx.adv.TaskBarIcon):
 
     
     # Callback setters
-    
-    def set_on_settings(self, callback: Callable) -> None:
-        """Set settings callback."""
-        self._on_settings_callback = callback
-    
-    def set_on_detail(self, callback: Callable) -> None:
-        """Set detail window callback."""
-        self._on_detail_callback = callback
-    
-    def set_on_about(self, callback: Callable) -> None:
-        """Set about callback."""
-        self._on_about_callback = callback
-    
-    def set_on_refresh(self, callback: Callable) -> None:
-        """Set refresh callback."""
-        self._on_refresh_callback = callback
-    
-    def set_on_pause(self, callback: Callable) -> None:
-        """Set pause callback."""
-        self._on_pause_callback = callback
-    
-    def set_on_auto_start(self, callback: Callable) -> None:
-        """Set auto start callback."""
-        self._on_auto_start_callback = callback
     
     def set_on_exit(self, callback: Callable) -> None:
         """Set exit callback."""
