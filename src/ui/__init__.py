@@ -1,16 +1,8 @@
 """
-UI layer for system tray, settings dialog, and detail window.
+UI layer package.
+
+Avoid eager imports here; modules are imported lazily by callers.
 """
 
-from .tray_icon import ETFTrayIcon
-from .settings_dialog import SettingsDialog
-from .detail_window import DetailWindow
-from .about_dialog import AboutDialog
-
-__all__ = [
-    'ETFTrayIcon',
-    'SettingsDialog',
-    'DetailWindow',
-    'AboutDialog',
-]
+__all__ = []
 

@@ -5,7 +5,7 @@ Modern flat design with left navigation and right content panels.
 Provides user-friendly interface for all configuration options.
 """
 
-from typing import Dict, Optional, List, Tuple
+from typing import Dict, Optional, List, Tuple, Callable
 import json
 
 import wx
@@ -15,6 +15,8 @@ from ..config.manager import ConfigManager
 from ..config.validator import ConfigValidator
 from ..utils.logger import get_logger
 from ..utils.helpers import validate_etf_code
+
+import logging
 
 
 class ETFSearchPopup(wx.PopupWindow):
@@ -133,6 +135,7 @@ class ETFSearchPopup(wx.PopupWindow):
         name_text = wx.StaticText(panel, label=display_name)
         name_font = name_text.GetFont()
         name_font.SetPointSize(9)
+        name_font.SetWeight(wx.FONTWEIGHT_BOLD)
         name_text.SetFont(name_font)
         sizer.Add(name_text, 1, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 8)
         
@@ -209,7 +212,10 @@ class SettingsDialog(wx.Dialog):
     COLOR_TEXT_SECONDARY = wx.Colour(96, 96, 96)
     COLOR_SEPARATOR = wx.Colour(225, 225, 225)
     
-    def __init__(self, parent, config_manager: ConfigManager, fetch_name_callback=None):
+    def __init__(self, parent, config_manager: ConfigManager, fetch_name_callback=None,
+                 on_manual_refresh: Optional[Callable] = None,
+                 on_pause_toggle: Optional[Callable] = None,
+                 get_pause_state: Optional[Callable[[], bool]] = None):
         """
         Initialize settings dialog.
         
@@ -227,6 +233,9 @@ class SettingsDialog(wx.Dialog):
         
         self._config = config_manager
         self._fetch_name_callback = fetch_name_callback
+        self._on_manual_refresh_callback = on_manual_refresh
+        self._on_pause_toggle_callback = on_pause_toggle
+        self._get_pause_state_callback = get_pause_state
         self._logger = get_logger(__name__)
         self._etf_name_cache: Dict[str, str] = {}
         
@@ -237,71 +246,87 @@ class SettingsDialog(wx.Dialog):
         # Panels
         self._content_panels = []
         
-        # Store all ETF data for search filtering
-        self._all_etf_items = []  # Store (code, name, remark) tuples
-        
-        # Search popup
-        self._search_popup = None
+        # ETF 管理功能移除
         
         # Create UI
         self._create_ui()
         
-        # Create search popup after UI is created
-        self._search_popup = ETFSearchPopup(self, self._on_search_add_etf)
+        # ETF 搜索弹窗移除
         
         # Load current settings
         self._load_settings()
         
         self.Centre()
+
+        # 不再用全局鼠标捕获，避免吞噬按钮事件
+        try:
+            self._switch_panel(0)
+        except Exception:
+            pass
+    
+    def _log_focus_event(self, event, widget_name):
+        """A general-purpose focus event logger."""
+        window = event.GetWindow()
+        event_type = "SetFocus" if isinstance(event, wx.FocusEvent) and event.GetEventType() == wx.wxEVT_SET_FOCUS else "KillFocus"
         
-        # Bind global click handler to close popup
-        self.Bind(wx.EVT_LEFT_DOWN, self._on_dialog_click)
+        # For KillFocus, find out who is receiving the focus
+        if event_type == "KillFocus":
+            new_focus_target = wx.Window.FindFocus()
+            new_focus_name = new_focus_target.GetName() if new_focus_target else "None"
+            self._logger.info(f"[FOCUS] {widget_name} ({window.GetId()}) lost focus. New focus is on: {new_focus_name} ({new_focus_target.GetId() if new_focus_target else 'N/A'})")
+        else:
+            self._logger.info(f"[FOCUS] {widget_name} ({window.GetId()}) received focus.")
+        
+        event.Skip()
     
     def _create_ui(self) -> None:
         """Create user interface with left navigation and right content."""
-        main_panel = wx.Panel(self)
-        main_panel.SetBackgroundColour(self.COLOR_CONTENT_BG)
+        main_panel = wx.Panel(self, style=wx.TAB_TRAVERSAL)
+        main_panel.SetName("main_panel")
+        main_panel.Bind(wx.EVT_SET_FOCUS, lambda evt: self._log_focus_event(evt, "main_panel"))
+        main_panel.Bind(wx.EVT_KILL_FOCUS, lambda evt: self._log_focus_event(evt, "main_panel"))
+
+        outer_sizer = wx.BoxSizer(wx.VERTICAL)
         main_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        
+    
         # Left navigation panel
         nav_panel = self._create_navigation_panel(main_panel)
         main_sizer.Add(nav_panel, 0, wx.EXPAND)
-        
+    
         # Vertical separator
         separator = wx.Panel(main_panel, size=(1, -1))
         separator.SetBackgroundColour(self.COLOR_SEPARATOR)
         main_sizer.Add(separator, 0, wx.EXPAND)
-        
-        # Right content panel container
-        self._content_container = wx.Panel(main_panel)
+    
+        # Right content panel container with TAB_TRAVERSAL
+        self._content_container = wx.Panel(main_panel, style=wx.TAB_TRAVERSAL)
+        self._content_container.SetName("content_container")
+        self._content_container.Bind(wx.EVT_SET_FOCUS, lambda evt: self._log_focus_event(evt, "content_container"))
+        self._content_container.Bind(wx.EVT_KILL_FOCUS, lambda evt: self._log_focus_event(evt, "content_container"))
         self._content_container.SetBackgroundColour(self.COLOR_CONTENT_BG)
         content_sizer = wx.BoxSizer(wx.VERTICAL)
-        
-        # Create all content panels
-        self._create_fund_panel(self._content_container, content_sizer)
+    
+        # Create all content panels and add them to the sizer
         self._create_refresh_panel(self._content_container, content_sizer)
         self._create_other_panel(self._content_container, content_sizer)
         self._create_about_panel(self._content_container, content_sizer)
-        
+    
         self._content_container.SetSizer(content_sizer)
         main_sizer.Add(self._content_container, 1, wx.EXPAND)
-        
-        # Bottom buttons panel
-        button_panel = self._create_button_panel(main_panel)
-        
-        # Main layout
-        outer_sizer = wx.BoxSizer(wx.VERTICAL)
+    
         outer_sizer.Add(main_sizer, 1, wx.EXPAND)
-        
+    
         # Horizontal separator above buttons
         h_separator = wx.Panel(main_panel, size=(-1, 1))
         h_separator.SetBackgroundColour(self.COLOR_SEPARATOR)
         outer_sizer.Add(h_separator, 0, wx.EXPAND)
-        
+    
+        # Bottom buttons panel
+        button_panel = self._create_button_panel(main_panel)
         outer_sizer.Add(button_panel, 0, wx.EXPAND | wx.ALL, 15)
-        
+    
         main_panel.SetSizer(outer_sizer)
-        
+    
         # Show first panel by default
         self._switch_panel(0)
     
@@ -313,7 +338,6 @@ class SettingsDialog(wx.Dialog):
         
         # Navigation items
         nav_items = [
-            ("基金管理", "管理自选 ETF 列表"),
             ("刷新设置", "配置刷新和轮播参数"),
             ("其他选项", "开机自启动等设置"),
             ("关于", "版本和软件信息")
@@ -345,16 +369,26 @@ class SettingsDialog(wx.Dialog):
         
         btn_panel.SetSizer(btn_sizer)
         btn_panel.SetCursor(wx.Cursor(wx.CURSOR_HAND))
-        
+    
         # Store index for event handling
         btn_panel._nav_index = index
+    
+        # Bind events using a helper to avoid lambda issues in loops
+        def create_handler(panel, idx):
+            def on_click(event):
+                self._on_nav_click(idx)
+                event.Skip()  # Allow event to propagate if needed
+    
+            panel.Bind(wx.EVT_LEFT_UP, on_click)
+            # Also bind to child labels if they exist
+            for child in panel.GetChildren():
+                child.Bind(wx.EVT_LEFT_UP, on_click)
+    
+        create_handler(btn_panel, index)
         
-        # Bind events
-        btn_panel.Bind(wx.EVT_LEFT_DOWN, lambda e: self._on_nav_click(index))
-        title_label.Bind(wx.EVT_LEFT_DOWN, lambda e: self._on_nav_click(index))
         btn_panel.Bind(wx.EVT_ENTER_WINDOW, lambda e: self._on_nav_hover(btn_panel, True))
         btn_panel.Bind(wx.EVT_LEAVE_WINDOW, lambda e: self._on_nav_hover(btn_panel, False))
-        
+    
         return btn_panel
     
     def _on_nav_hover(self, panel: wx.Panel, entering: bool) -> None:
@@ -389,7 +423,11 @@ class SettingsDialog(wx.Dialog):
     
     def _create_fund_panel(self, parent, sizer) -> None:
         """Create fund management panel."""
-        panel = wx.Panel(parent)
+        panel = wx.Panel(parent, style=wx.TAB_TRAVERSAL)
+        panel.SetName("fund_panel")
+        panel.Bind(wx.EVT_SET_FOCUS, lambda evt: self._log_focus_event(evt, "fund_panel"))
+        panel.Bind(wx.EVT_KILL_FOCUS, lambda evt: self._log_focus_event(evt, "fund_panel"))
+
         panel.SetBackgroundColour(self.COLOR_CONTENT_BG)
         panel_sizer = wx.BoxSizer(wx.VERTICAL)
         
@@ -406,20 +444,25 @@ class SettingsDialog(wx.Dialog):
         
         title_row_sizer.AddStretchSpacer()
         
-        # Search box
+        # Search box (Replaced with TextCtrl for diagnostics)
         search_label = wx.StaticText(panel, label="搜索：")
         search_label.SetForegroundColour(self.COLOR_TEXT_SECONDARY)
         title_row_sizer.Add(search_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
         
-        self._search_box = wx.SearchCtrl(panel, size=(250, 28), style=wx.TE_PROCESS_ENTER)
-        self._search_box.ShowSearchButton(True)
-        self._search_box.ShowCancelButton(True)
-        self._search_box.SetHint("输入代码或名称，回车搜索")
-        # Bind multiple events to ensure search triggers
-        self._search_box.Bind(wx.EVT_SEARCHCTRL_SEARCH_BTN, self._on_search_enter)  # Click search button
-        self._search_box.Bind(wx.EVT_TEXT_ENTER, self._on_search_enter)  # Press Enter
-        self._search_box.Bind(wx.EVT_SEARCHCTRL_CANCEL_BTN, self._on_search_cancel)
-        title_row_sizer.Add(self._search_box, 0, wx.ALIGN_CENTER_VERTICAL)
+        self._search_box = wx.TextCtrl(panel, size=(200, 28), style=wx.TE_PROCESS_ENTER)
+        self._search_box.SetName("search_box")
+        self._search_box.Bind(wx.EVT_SET_FOCUS, lambda evt: self._log_focus_event(evt, "search_box"))
+        self._search_box.Bind(wx.EVT_KILL_FOCUS, lambda evt: self._log_focus_event(evt, "search_box"))
+        self._search_box.SetHint("输入代码或名称")
+        self._search_box.Bind(wx.EVT_TEXT_ENTER, self._on_search_enter)
+        title_row_sizer.Add(self._search_box, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
+
+        search_btn = wx.Button(panel, label="搜索", size=(45, 28))
+        search_btn.SetName("search_button")
+        search_btn.Bind(wx.EVT_SET_FOCUS, lambda evt: self._log_focus_event(evt, "search_button"))
+        search_btn.Bind(wx.EVT_KILL_FOCUS, lambda evt: self._log_focus_event(evt, "search_button"))
+        search_btn.Bind(wx.EVT_BUTTON, self._on_search_enter)
+        title_row_sizer.Add(search_btn, 0, wx.ALIGN_CENTER_VERTICAL)
         
         panel_sizer.Add(title_row_sizer, 0, wx.EXPAND | wx.ALL, 15)
         
@@ -436,6 +479,9 @@ class SettingsDialog(wx.Dialog):
         self._etf_list.InsertColumn(0, "代码", width=120)
         self._etf_list.InsertColumn(1, "名称", width=200)
         self._etf_list.InsertColumn(2, "备注", width=240)
+        # Bind selection/focus events to improve reliability
+        self._etf_list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_list_item_selected)
+        self._etf_list.Bind(wx.EVT_LIST_ITEM_FOCUSED, self._on_list_item_focused)
         panel_sizer.Add(self._etf_list, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 15)
         
         # Button row
@@ -448,7 +494,10 @@ class SettingsDialog(wx.Dialog):
         button_sizer.Add(self._add_btn, 0, wx.RIGHT, 8)
         
         self._delete_btn = wx.Button(panel, label="删除", size=(100, 32))
+        self._delete_btn.SetDefault()          # 第一次点击即生效
         self._delete_btn.Bind(wx.EVT_BUTTON, self._on_delete_etf)
+        # 键盘 Delete 快捷删除
+        self._delete_btn.Bind(wx.EVT_KEY_DOWN, self._on_fund_key)
         button_sizer.Add(self._delete_btn, 0, wx.RIGHT, 8)
         
         self._clear_btn = wx.Button(panel, label="清空", size=(100, 32))
@@ -460,6 +509,32 @@ class SettingsDialog(wx.Dialog):
         panel.SetSizer(panel_sizer)
         self._content_panels.append(panel)
         sizer.Add(panel, 1, wx.EXPAND)
+
+    def _on_list_item_selected(self, event) -> None:
+        """Track selected index for consistent delete behavior."""
+        self._selected_index = event.GetIndex()
+        event.Skip()
+
+    def _on_list_item_focused(self, event) -> None:
+        """Fallback when item is focused but not selected."""
+        self._selected_index = event.GetIndex()
+        event.Skip()
+
+    def _on_fund_key(self, event):
+        """键盘 Delete 快捷删除"""
+        if event.GetKeyCode() == wx.WXK_DELETE:
+            self._on_delete_etf(event)
+        else:
+            event.Skip()
+
+    def _confirm_and_delete(self, code: str) -> None:
+        """弹出确认并删除"""
+        if wx.MessageBox(f"确定要删除 {code} 吗？", "确认删除",
+                         wx.YES_NO | wx.ICON_QUESTION) == wx.YES:
+            self._all_etf_items = [i for i in self._all_etf_items if i[0] != code]
+            self._selected_index = -1
+            self._refresh_etf_list()
+            self._logger.info(f"Deleted ETF: {code}")
     
     def _create_refresh_panel(self, parent, sizer) -> None:
         """Create refresh settings panel."""
@@ -561,6 +636,32 @@ class SettingsDialog(wx.Dialog):
             majorDimension=3
         )
         content_sizer.Add(self._rotation_mode, 0, wx.ALL, 15)
+
+        # Separator
+        sep3 = wx.Panel(panel, size=(-1, 1))
+        sep3.SetBackgroundColour(self.COLOR_SEPARATOR)
+        content_sizer.Add(sep3, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP | wx.BOTTOM, 10)
+
+        # Live controls: pause and manual refresh
+        live_ctrl_sizer = wx.BoxSizer(wx.HORIZONTAL)
+
+        self._pause_cb = wx.CheckBox(panel, label="暂停刷新")
+        # Initialize pause state if provider available
+        try:
+            if self._get_pause_state_callback:
+                self._pause_cb.SetValue(bool(self._get_pause_state_callback()))
+        except Exception:
+            pass
+        self._pause_cb.Bind(wx.EVT_CHECKBOX, self._on_pause_checkbox)
+        live_ctrl_sizer.Add(self._pause_cb, 0, wx.RIGHT, 20)
+
+        manual_btn = wx.Button(panel, label="立即刷新", size=(100, 28))
+        manual_btn.SetBackgroundColour(self.COLOR_ACCENT)
+        manual_btn.SetForegroundColour(wx.WHITE)
+        manual_btn.Bind(wx.EVT_BUTTON, self._on_manual_refresh_clicked)
+        live_ctrl_sizer.Add(manual_btn, 0)
+
+        content_sizer.Add(live_ctrl_sizer, 0, wx.ALL, 15)
         
         panel_sizer.Add(content_sizer, 0, wx.EXPAND)
         
@@ -674,29 +775,19 @@ class SettingsDialog(wx.Dialog):
         panel.SetSizer(panel_sizer)
         self._content_panels.append(panel)
         sizer.Add(panel, 1, wx.EXPAND)
-    
+
     def _create_button_panel(self, parent) -> wx.Panel:
-        """Create bottom button panel."""
+        """Create bottom button panel with Cancel and Save buttons."""
         button_panel = wx.Panel(parent)
         button_panel.SetBackgroundColour(self.COLOR_CONTENT_BG)
         button_sizer = wx.BoxSizer(wx.HORIZONTAL)
         
+        # Align to right
         button_sizer.AddStretchSpacer()
-        
-        # Reset button (left aligned)
-        reset_btn = wx.Button(button_panel, label="恢复默认", size=(100, 32))
-        reset_btn.Bind(wx.EVT_BUTTON, self._on_reset)
-        button_sizer.Add(reset_btn, 0, wx.RIGHT, 10)
-        
-        button_sizer.AddStretchSpacer()
-        
-        # Cancel button
-        cancel_btn = wx.Button(button_panel, wx.ID_CANCEL, "取消", size=(100, 32))
-        cancel_btn.Bind(wx.EVT_BUTTON, self._on_cancel)
-        button_sizer.Add(cancel_btn, 0, wx.RIGHT, 10)
-        
+        # 仅保留保存按钮
         # Save button (accent color)
         save_btn = wx.Button(button_panel, wx.ID_OK, "保存", size=(100, 32))
+        save_btn.SetDefault()                   # 同样一次点击生效
         save_btn.SetBackgroundColour(self.COLOR_ACCENT)
         save_btn.SetForegroundColour(wx.WHITE)
         save_btn.Bind(wx.EVT_BUTTON, self._on_save)
@@ -724,6 +815,24 @@ class SettingsDialog(wx.Dialog):
         """Handle rotation spin control change."""
         value = self._rotation_value.GetValue()
         self._rotation_slider.SetValue(value)
+
+    def _on_pause_checkbox(self, event) -> None:
+        """Handle pause checkbox toggle."""
+        paused = self._pause_cb.GetValue()
+        if self._on_pause_toggle_callback:
+            try:
+                self._on_pause_toggle_callback(paused)
+            except Exception as e:
+                self._logger.error(f"Pause toggle failed: {e}")
+
+    def _on_manual_refresh_clicked(self, event) -> None:
+        """Handle manual refresh button click."""
+        if self._on_manual_refresh_callback:
+            try:
+                self._on_manual_refresh_callback()
+                wx.MessageBox("已触发一次数据刷新", "提示", wx.OK | wx.ICON_INFORMATION)
+            except Exception as e:
+                self._logger.error(f"Manual refresh failed: {e}")
     
     def _get_etf_display_name(self, code: str) -> str:
         """Return display name for ETF code, with optional API lookup."""
@@ -744,15 +853,7 @@ class SettingsDialog(wx.Dialog):
 
     def _load_settings(self) -> None:
         """Load current settings from configuration."""
-        # Load ETF list
-        etf_list = self._config.get('etf_list', [])
-        for code in etf_list:
-            name = self._get_etf_display_name(code)
-            remark = ""
-            self._all_etf_items.append((code, name, remark))
-            index = self._etf_list.InsertItem(self._etf_list.GetItemCount(), code)
-            self._etf_list.SetItem(index, 1, name)
-            self._etf_list.SetItem(index, 2, remark)
+        # ETF 列表由配置文件维护，设置界面不再加载或显示
         
         # Load refresh interval
         refresh_interval = self._config.get('refresh_interval', 5)
@@ -826,38 +927,18 @@ class SettingsDialog(wx.Dialog):
     
     def _on_delete_etf(self, event) -> None:
         """Handle delete ETF button."""
-        selected = self._etf_list.GetFirstSelected()
-        if selected == -1:
-            wx.MessageBox(
-                "请先选择要删除的 ETF",
-                "未选择",
-                wx.OK | wx.ICON_WARNING
-            )
+        code = self._get_selected_or_search_code()
+        if not code:
             return
-        
-        code = self._etf_list.GetItemText(selected, 0)
-        
-        # Confirm deletion
-        if wx.MessageBox(
-            f"确定要删除 {code} 吗？",
-            "确认删除",
-            wx.YES_NO | wx.ICON_QUESTION
-        ) == wx.YES:
-            # Remove from stored data
-            self._all_etf_items = [item for item in self._all_etf_items if item[0] != code]
-            
-            # Refresh the list view
-            self._refresh_etf_list()
-            
-            self._logger.info(f"Deleted ETF: {code}")
+        # 直接确认删除（去掉 CallAfter，避免二次事件延迟）
+        self._confirm_and_delete(code)
     
     def _on_clear_etf(self, event) -> None:
         """Handle clear ETF button."""
         if len(self._all_etf_items) == 0:
             return
-        
         if wx.MessageBox(
-            "确定要清空所有 ETF 吗？",
+            "确定要清空全部 ETF 吗？",
             "确认清空",
             wx.YES_NO | wx.ICON_QUESTION
         ) == wx.YES:
@@ -868,19 +949,6 @@ class SettingsDialog(wx.Dialog):
     
     def _on_save(self, event) -> None:
         """Handle save button."""
-        # Collect ETF codes from stored data (not from filtered list)
-        etf_codes = [item[0] for item in self._all_etf_items]
-        
-        # Validate ETF list
-        is_valid, error = ConfigValidator.validate_etf_list(etf_codes)
-        if not is_valid:
-            wx.MessageBox(
-                f"ETF 列表验证失败：{error}",
-                "验证错误",
-                wx.OK | wx.ICON_ERROR
-            )
-            return
-        
         # Get values
         refresh_interval = self._refresh_value.GetValue()
         rotation_interval = self._rotation_value.GetValue()
@@ -892,7 +960,6 @@ class SettingsDialog(wx.Dialog):
         auto_start = self._auto_start_cb.GetValue()
         
         # Update configuration
-        self._config.set('etf_list', etf_codes)
         self._config.set('refresh_interval', refresh_interval)
         self._config.set('rotation_interval', rotation_interval)
         self._config.set('rotation_mode', rotation_mode)
@@ -961,45 +1028,26 @@ class SettingsDialog(wx.Dialog):
     def _on_search_enter(self, event) -> None:
         """Handle search box enter key or search button click - trigger online search."""
         keyword = self._search_box.GetValue().strip()
-        
-        print(f"[DEBUG] Search triggered! Keyword: '{keyword}'")  # Console debug
-        self._logger.info(f"=== SEARCH TRIGGERED === Keyword: '{keyword}'")
-        
+        self._logger.info(f"[搜索] 触发关键字: '{keyword}'")
+
         if not keyword:
-            self._logger.info("Empty keyword, hiding popup")
+            # Empty keyword: hide popup
             if self._search_popup:
                 self._search_popup.Hide()
             return
-        
-        # Use a busy cursor to show searching
+
         busy = wx.BusyCursor()
-        
         try:
-            # Search ETF online
-            self._logger.info(f"Calling search API with keyword: {keyword}")
-            print(f"[DEBUG] Calling API...")
-            
+            # Perform online search
             results = self._search_etf_online(keyword)
-            
-            print(f"[DEBUG] API returned: {results}")
-            
             if results is not None:
-                self._logger.info(f"Search returned {len(results)} results")
-                print(f"[DEBUG] Found {len(results)} results")
-                
-                # Get existing codes
                 existing_codes = set(item[0] for item in self._all_etf_items)
-                
-                # Show results in popup
                 self._search_popup.show_results(results, existing_codes)
                 self._search_popup.position_below(self._search_box)
                 self._search_popup.Show()
-                self._logger.info("Search popup shown successfully")
-                print("[DEBUG] Popup shown")
+                self._logger.info(f"[搜索] 返回 {len(results)} 条结果")
             else:
-                # Search failed, show error
-                self._logger.error("Search API returned None - network error")
-                print("[DEBUG] API returned None - error")
+                self._logger.error("[搜索] 搜索接口返回为空，可能是网络问题")
                 wx.MessageBox(
                     "搜索失败，请检查网络连接或稍后重试",
                     "搜索错误",
@@ -1007,7 +1055,6 @@ class SettingsDialog(wx.Dialog):
                 )
         except Exception as e:
             self._logger.error(f"Search error: {e}", exc_info=True)
-            print(f"[DEBUG] Exception: {e}")
             wx.MessageBox(
                 f"搜索出错：{str(e)}",
                 "错误",
@@ -1124,3 +1171,7 @@ class SettingsDialog(wx.Dialog):
                     self._search_popup.Hide()
         
         event.Skip()
+
+    def _on_nav_click(self, index: int) -> None:
+        """Handle navigation button click."""
+        self._switch_panel(index)

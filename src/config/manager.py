@@ -42,7 +42,7 @@ class ConfigManager:
         "api_config": {
             "primary": {
                 "name": "eastmoney",
-                "base_url": "http://push2.eastmoney.com/api/qt/stock/get",
+                "base_url": "https://push2.eastmoney.com/api/qt/stock/get",
                 "timeout": 5,
                 "enabled": True
             },
@@ -89,9 +89,9 @@ class ConfigManager:
             "data_cache_expire": 300
         }
     }
-    
+
     def __new__(cls):
-        """Implement singleton pattern."""
+        """Ensure singleton instance creation in a thread-safe manner."""
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
@@ -137,7 +137,16 @@ class ConfigManager:
             is_valid, errors = ConfigValidator.validate_config(loaded_config)
             if not is_valid:
                 self._logger.warning(f"Configuration validation errors: {errors}")
-                # Still use the config but fill missing fields with defaults
+                # Attempt self-healing for common issues before merging defaults
+                corrected = self._sanitize_config(loaded_config)
+                if corrected:
+                    self._logger.info("Applied configuration self-healing for invalid values")
+                    # Persist corrected config to disk to avoid repeated warnings
+                    try:
+                        self._config = self._merge_with_defaults(loaded_config)
+                        self.save()
+                    except Exception as e:
+                        self._logger.warning(f"Failed to save corrected config: {e}")
             
             # Merge with defaults to ensure all fields exist
             self._config = self._merge_with_defaults(loaded_config)
@@ -155,6 +164,82 @@ class ConfigManager:
             self._logger.error(f"Failed to load config: {e}")
             self._config = self.DEFAULT_CONFIG.copy()
             return False
+
+    def _sanitize_config(self, cfg: Dict[str, Any]) -> bool:
+        """
+        Clamp out-of-range values to valid bounds for common fields.
+        Returns True if any correction was applied.
+        """
+        corrected = False
+        try:
+            # floating_window.size: width [200, 800], height [40, 200]
+            fw = cfg.get('floating_window')
+            if isinstance(fw, dict):
+                size = fw.get('size')
+                if isinstance(size, (list, tuple)) and len(size) == 2:
+                    width, height = size
+                    new_width = width
+                    new_height = height
+                    if isinstance(width, int):
+                        if width < 200:
+                            new_width = 200
+                        elif width > 800:
+                            new_width = 800
+                    if isinstance(height, int):
+                        if height < 40:
+                            new_height = 40
+                        elif height > 200:
+                            new_height = 200
+                    if new_width != width or new_height != height:
+                        fw['size'] = [int(new_width), int(new_height)]
+                        corrected = True
+                        self._logger.info(
+                            f"Clamped floating_window.size from [{width}, {height}] to [{new_width}, {new_height}]"
+                        )
+            # refresh_interval: [3, 30]
+            if 'refresh_interval' in cfg and isinstance(cfg['refresh_interval'], int):
+                ri = cfg['refresh_interval']
+                new_ri = min(max(ri, 3), 30)
+                if new_ri != ri:
+                    cfg['refresh_interval'] = new_ri
+                    corrected = True
+                    self._logger.info(
+                        f"Clamped refresh_interval from {ri} to {new_ri}"
+                    )
+            # api_config.retry_count: [0, 5]
+            api_cfg = cfg.get('api_config')
+            if isinstance(api_cfg, dict):
+                # Ensure EastMoney uses HTTPS base URL
+                primary = api_cfg.get('primary')
+                if isinstance(primary, dict):
+                    name = primary.get('name')
+                    base_url = primary.get('base_url')
+                    if isinstance(base_url, str) and name == 'eastmoney' and base_url.startswith('http://push2.eastmoney.com'):
+                        primary['base_url'] = base_url.replace('http://', 'https://', 1)
+                        corrected = True
+                        self._logger.info("Updated EastMoney base_url to HTTPS for stability")
+                rc = api_cfg.get('retry_count')
+                if isinstance(rc, int):
+                    new_rc = min(max(rc, 0), 5)
+                    if new_rc != rc:
+                        api_cfg['retry_count'] = new_rc
+                        corrected = True
+                        self._logger.info(
+                            f"Clamped api_config.retry_count from {rc} to {new_rc}"
+                        )
+                ft = api_cfg.get('failover_threshold')
+                if isinstance(ft, int):
+                    new_ft = min(max(ft, 1), 10)
+                    if new_ft != ft:
+                        api_cfg['failover_threshold'] = new_ft
+                        corrected = True
+                        self._logger.info(
+                            f"Clamped api_config.failover_threshold from {ft} to {new_ft}"
+                        )
+        except Exception as e:
+            # Any error during sanitize should not break loading
+            self._logger.warning(f"Failed during config sanitize: {e}")
+        return corrected
     
     def save(self) -> bool:
         """

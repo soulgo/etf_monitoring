@@ -3,8 +3,6 @@ About dialog displaying application information.
 """
 
 import wx
-
-
 class AboutDialog(wx.Dialog):
     """
     Simple about dialog with version and developer information.
@@ -32,8 +30,6 @@ class AboutDialog(wx.Dialog):
         panel = wx.Panel(self)
         sizer = wx.BoxSizer(wx.VERTICAL)
         
-        # Application name
-        app_name = wx.StaticText(panel, label="ETF 监控工具")
         font = app_name.GetFont()
         font.PointSize = 16
         font = font.Bold()
@@ -70,4 +66,4 @@ class AboutDialog(wx.Dialog):
         sizer.Add(close_btn, 0, wx.ALL | wx.ALIGN_CENTER, 10)
         
         panel.SetSizer(sizer)
-
+        close_btn = wx.Button(panel, wx.ID_OK, "关闭")

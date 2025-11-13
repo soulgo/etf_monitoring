@@ -8,16 +8,14 @@ import sys
 import wx
 
 from .config.manager import get_config
+from pathlib import Path
 from .data.api_adapter import APIAdapterFactory
 from .data.fetcher import DataFetcher
 from .data.cache import CacheManager
 from .ui.tray_icon import ETFTrayIcon
 from .ui.settings_dialog import SettingsDialog
-from .ui.detail_window import DetailWindow
-from .ui.about_dialog import AboutDialog
 from .ui.floating_window import FloatingWindow
 from .utils.logger import setup_logger, get_logger
-
 
 class ETFMonitorApp(wx.App):
     """
@@ -56,14 +54,13 @@ class ETFMonitorApp(wx.App):
                     wx.OK | wx.ICON_WARNING
                 )
                 return False
-        
         # Initialize components
         try:
             self._init_components()
         except Exception as e:
-            self.logger.critical(f"Failed to initialize components: {e}", exc_info=True)
+            self.logger.error(f"Failed to initialize components: {e}", exc_info=True)
             wx.MessageBox(
-                f"初始化失败：{e}\n请查看日志文件",
+                "初始化失败，请查看日志以获取更多信息",
                 "启动失败",
                 wx.OK | wx.ICON_ERROR
             )
@@ -146,12 +143,6 @@ class ETFMonitorApp(wx.App):
         )
         
         # Set tray icon callbacks
-        self.tray_icon.set_on_settings(self._on_show_settings)
-        self.tray_icon.set_on_detail(self._on_show_detail)
-        self.tray_icon.set_on_about(self._on_show_about)
-        self.tray_icon.set_on_refresh(self._on_manual_refresh)
-        self.tray_icon.set_on_pause(self._on_pause_toggle)
-        self.tray_icon.set_on_auto_start(self._on_auto_start_toggle)
         self.tray_icon.set_on_exit(self._on_exit)
         self.tray_icon.set_on_menu_open(self._on_tray_menu_open)
         self.tray_icon.set_on_menu_close(self._on_tray_menu_close)
@@ -201,6 +192,15 @@ class ETFMonitorApp(wx.App):
             self.floating_window.start_rotation()
         
         self.logger.info("Background services started")
+        try:
+            config_path = Path(self.config.DEFAULT_CONFIG_FILE)
+            if config_path.exists():
+                self._config_mtime = config_path.stat().st_mtime
+                self._config_watch_timer = wx.Timer(self)
+                self.Bind(wx.EVT_TIMER, self._on_config_watch_timer, self._config_watch_timer)
+                self._config_watch_timer.Start(1000)
+        except Exception as e:
+            self.logger.warning(f"Config watch init failed: {e}")
     
     def _on_data_updated(self, etf_data: dict, changed_codes: list) -> None:
         """
@@ -242,12 +242,23 @@ class ETFMonitorApp(wx.App):
         if self.settings_dialog and self.settings_dialog.IsShown():
             self.settings_dialog.Raise()
             return
-        
-        self.settings_dialog = SettingsDialog(
-            None,
-            self.config,
-            fetch_name_callback=self._fetch_etf_name
-        )
+        try:
+            self.settings_dialog = SettingsDialog(
+                None,
+                self.config,
+                fetch_name_callback=self._fetch_etf_name,
+                on_manual_refresh=self._on_manual_refresh,
+                on_pause_toggle=self._on_pause_toggle,
+                get_pause_state=lambda: getattr(self.data_fetcher, '_paused', False)
+            )
+        except Exception as e:
+            self.logger.error(f"Failed to load settings dialog: {e}", exc_info=True)
+            wx.MessageBox(
+                "设置窗口加载失败，请查看日志",
+                "加载失败",
+                wx.OK | wx.ICON_ERROR
+            )
+            return
         
         if self.settings_dialog.ShowModal() == wx.ID_OK:
             # Configuration saved, reload and restart services
@@ -259,6 +270,16 @@ class ETFMonitorApp(wx.App):
     
     def _on_show_detail(self) -> None:
         """Show detail window."""
+        try:
+            from .ui.detail_window import DetailWindow
+        except Exception as e:
+            self.logger.error(f"Failed to load detail window: {e}", exc_info=True)
+            wx.MessageBox(
+                "详情窗口模块加载失败，请查看日志",
+                "加载失败",
+                wx.OK | wx.ICON_ERROR
+            )
+            return
         if self.detail_window is None:
             self.detail_window = DetailWindow(None)
             self.detail_window.set_on_refresh(self._on_manual_refresh)
@@ -272,9 +293,18 @@ class ETFMonitorApp(wx.App):
     
     def _on_show_about(self) -> None:
         """Show about dialog."""
-        about = AboutDialog(None)
-        about.ShowModal()
-        about.Destroy()
+        try:
+            from .ui.about_dialog import AboutDialog
+            about = AboutDialog(None)
+            about.ShowModal()
+            about.Destroy()
+        except Exception as e:
+            self.logger.error(f"Failed to load about dialog: {e}", exc_info=True)
+            wx.MessageBox(
+                "关于窗口模块加载失败，请查看日志",
+                "加载失败",
+                wx.OK | wx.ICON_ERROR
+            )
     
     def _on_manual_refresh(self) -> None:
         """Trigger manual refresh."""
@@ -326,8 +356,12 @@ class ETFMonitorApp(wx.App):
     def _on_tray_menu_close(self) -> None:
         """Handle tray menu close - resume floating window guard."""
         if self.floating_window:
-            self.floating_window.resume_guard()
-            self.logger.info("[托盘菜单] 菜单关闭，恢复悬浮窗守护")
+            try:
+                wx.CallLater(200, self.floating_window.resume_guard)
+                self.logger.info("[托盘菜单] 菜单关闭，延迟恢复悬浮窗守护")
+            except Exception:
+                self.floating_window.resume_guard()
+                self.logger.info("[托盘菜单] 菜单关闭，恢复悬浮窗守护")
     
     def _on_exit(self) -> None:
         """Handle application exit."""
@@ -388,6 +422,21 @@ class ETFMonitorApp(wx.App):
                 self.logger.info("[配置重载] 悬浮窗已隐藏")
         
         self.logger.info("[配置重载] 配置重载完成")
+
+    def _on_config_watch_timer(self, event) -> None:
+        try:
+            config_path = Path(self.config.DEFAULT_CONFIG_FILE)
+            if not config_path.exists():
+                return
+            mtime = config_path.stat().st_mtime
+            if not hasattr(self, '_config_mtime'):
+                self._config_mtime = mtime
+                return
+            if mtime != self._config_mtime:
+                self._config_mtime = mtime
+                self._reload_configuration()
+        except Exception as e:
+            self.logger.warning(f"Config watch error: {e}")
     
     def _fetch_etf_name(self, code: str) -> str:
         """

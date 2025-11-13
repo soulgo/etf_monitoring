@@ -85,7 +85,6 @@ class ETFTrayIcon(wx.adv.TaskBarIcon):
         self._set_icon(icon_path)
         
         # Bind events
-        self.Bind(wx.adv.EVT_TASKBAR_LEFT_DCLICK, self._on_left_double_click)
         
         self._logger.info("Tray icon initialized")
     
@@ -131,41 +130,7 @@ class ETFTrayIcon(wx.adv.TaskBarIcon):
         
         # 绑定菜单销毁事件以恢复守护
         menu.Bind(wx.EVT_MENU_CLOSE, self._on_menu_close)
-        
-        # View all ETFs (bold)
-        item = menu.Append(wx.ID_ANY, "查看所有基金")
-        item.Font = item.Font.Bold()
-        menu.Bind(wx.EVT_MENU, self._on_view_detail, item)
-        
-        menu.AppendSeparator()
-        
-        # Settings
-        item = menu.Append(wx.ID_ANY, "设置...")
-        menu.Bind(wx.EVT_MENU, self._on_settings, item)
-        
-        # Manual refresh
-        item = menu.Append(wx.ID_ANY, "手动刷新")
-        menu.Bind(wx.EVT_MENU, self._on_refresh, item)
-        
-        menu.AppendSeparator()
-        
-        # Pause refresh (checkable)
-        item = menu.AppendCheckItem(wx.ID_ANY, "暂停刷新")
-        item.Check(self._paused)
-        menu.Bind(wx.EVT_MENU, self._on_pause, item)
-        
-        # Auto start (checkable)
-        item = menu.AppendCheckItem(wx.ID_ANY, "开机自启")
-        # Check status from registry or config
-        menu.Bind(wx.EVT_MENU, self._on_auto_start, item)
-        
-        menu.AppendSeparator()
-        
-        # About
-        item = menu.Append(wx.ID_ANY, "关于")
-        menu.Bind(wx.EVT_MENU, self._on_about, item)
-        
-        # Exit - 使用wx.ID_EXIT确保只触发一次
+
         item = menu.Append(wx.ID_EXIT, "退出")
         menu.Bind(wx.EVT_MENU, self._on_exit, item)
         
@@ -315,9 +280,8 @@ class ETFTrayIcon(wx.adv.TaskBarIcon):
     # Event handlers
     
     def _on_left_double_click(self, event) -> None:
-        """Handle left double-click (open detail window)."""
-        if self._on_detail_callback:
-            self._on_detail_callback()
+        """Handle left double-click (disabled)."""
+        return
     
     def _on_view_detail(self, event) -> None:
         """Handle view detail menu item."""
@@ -355,6 +319,7 @@ class ETFTrayIcon(wx.adv.TaskBarIcon):
         """Handle exit event."""
         if self._on_exit_callback:
             self._on_exit_callback()
+
     
     # Callback setters
     
@@ -385,6 +350,7 @@ class ETFTrayIcon(wx.adv.TaskBarIcon):
     def set_on_exit(self, callback: Callable) -> None:
         """Set exit callback."""
         self._on_exit_callback = callback
+
     
     def set_on_menu_open(self, callback: Callable) -> None:
         """Set menu open callback (called when tray menu opens)."""
@@ -398,7 +364,7 @@ class ETFTrayIcon(wx.adv.TaskBarIcon):
         """Handle menu close event."""
         if self._on_menu_close_callback:
             try:
-                self._on_menu_close_callback()
+                wx.CallLater(200, self._on_menu_close_callback)
             except Exception as e:
                 self._logger.error(f"Error in menu close callback: {e}")
         event.Skip()

@@ -245,6 +245,17 @@ class DataFetcher:
                 self._data_callback(quotes, changed_codes)
             except Exception as e:
                 self._logger.error(f"[数据回调] 回调函数执行异常: {e}")
+        elif not quotes:
+            # 本轮一个都没成功，主动触发接口切换（若有备用）
+            try:
+                if self._backup_adapters and self._current_adapter_index < len(self._backup_adapters) - 1:
+                    self._logger.warning("[接口切换] 当前接口本轮无数据，尝试切换到下一个备用接口")
+                    self._switch_to_next_backup()
+                else:
+                    # 没有可切换的备用接口或已在最后一个备用接口
+                    self._logger.warning("[接口切换] 当前接口本轮无数据，暂无可用备用接口")
+            except Exception as e:
+                self._logger.error(f"[接口切换] 自动切换失败: {e}")
     
     def _fetch_single_quote(self, code: str) -> Optional[ETFQuote]:
         """

@@ -94,19 +94,32 @@ class EastMoneyAdapter(QuoteAPIAdapter):
                 'secid': secid,
                 'fields': 'f57,f58,f43,f44,f45,f46,f60,f152'
             }
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Referer': 'https://quote.eastmoney.com/',
+                'Accept': 'application/json'
+            }
             
-            # Send request with retry logic for 502 errors
-            max_retries = 2
+            # Send request with retry logic for 502 errors (exponential backoff + jitter)
+            max_retries = 3
+            base_delay = 0.5
             for attempt in range(max_retries):
                 try:
-                    self.logger.debug(f"[EastMoney] 请求 {code} (attempt {attempt + 1})")
-                    response = self.client.get(url, params=params)
+                    self.logger.debug(f"[EastMoney] 请求 {code} (attempt {attempt + 1}/{max_retries})")
+                    response = self.client.get(url, params=params, headers=headers)
                     response.raise_for_status()
                     break  # Success, exit retry loop
                 except httpx.HTTPStatusError as e:
-                    if e.response.status_code == 502 and attempt < max_retries - 1:
-                        self.logger.warning(f"[EastMoney] 502错误，重试 {attempt + 1}/{max_retries - 1}")
-                        time.sleep(0.5)  # 短暂延迟后重试
+                    status = e.response.status_code if e.response is not None else None
+                    if status == 502 and attempt < max_retries - 1:
+                        # Exponential backoff with jitter
+                        delay = base_delay * (2 ** attempt)
+                        jitter = 0.2
+                        sleep_seconds = max(0.2, delay + (jitter * (0.5 - __import__('random').random())))
+                        self.logger.warning(
+                            f"[EastMoney] 502错误，退避 {sleep_seconds:.2f}s 后重试 ({attempt + 1}/{max_retries - 1})"
+                        )
+                        time.sleep(sleep_seconds)
                         continue
                     else:
                         raise  # 非502错误或最后一次尝试，抛出异常
@@ -178,7 +191,12 @@ class EastMoneyAdapter(QuoteAPIAdapter):
             return None
             
         except httpx.HTTPError as e:
-            self.logger.error(f"[EastMoney] HTTP错误 {code}: {e}")
+            status = getattr(getattr(e, 'response', None), 'status_code', None)
+            url = getattr(getattr(e, 'request', None), 'url', '')
+            if status:
+                self.logger.error(f"[EastMoney] HTTP错误 {code}: {status} for url '{url}'")
+            else:
+                self.logger.error(f"[EastMoney] HTTP错误 {code}: {e}")
             return None
             
         except Exception as e:
@@ -615,9 +633,16 @@ class APIAdapterFactory:
         Returns:
             API adapter instance or None if unknown name
         """
-        adapter_class = cls.ADAPTERS.get(name.lower())
+        adapter_name = (name or '').lower()
+        adapter_class = cls.ADAPTERS.get(adapter_name)
         if adapter_class is None:
             return None
+        # Normalize base_url for EastMoney
+        if adapter_name == 'eastmoney':
+            if not base_url:
+                base_url = 'https://push2.eastmoney.com/api/qt/stock/get'
+            elif base_url.startswith('http://push2.eastmoney.com'):
+                base_url = base_url.replace('http://', 'https://', 1)
         
         return adapter_class(base_url, timeout)
 

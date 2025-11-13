@@ -9,7 +9,7 @@
   "api_config": {
     "primary": {
       "name": "eastmoney",
-      "base_url": "http://push2.eastmoney.com/api/qt/stock/get",
+      "base_url": "https://push2.eastmoney.com/api/qt/stock/get",
       "timeout": 5,
       "enabled": true
     },
@@ -68,4 +68,3 @@
     "data_cache_expire": 300
   }
 }
-
