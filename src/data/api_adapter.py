@@ -298,8 +298,8 @@ class SinaAdapter(QuoteAPIAdapter):
             price = fields[3]
             pre_close = fields[2]
             volume = fields[8]
-            update_date = fields[30]  # YYYY-MM-DD
-            update_time = fields[31]  # HH:MM:SS
+            update_date = fields[-2]  # YYYY-MM-DD
+            update_time = fields[-1]  # HH:MM:SS
             
             # Validate required fields
             if not price or not pre_close:

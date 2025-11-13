@@ -170,11 +170,14 @@ class ETFMonitorApp(wx.App):
         else:
             self.floating_window = None
             self.logger.info("Floating window disabled in config")
+
+        # Ensure detail_window attribute exists to avoid callback errors
+        if not hasattr(self, 'detail_window'):
+            self.detail_window = None
     
     def _start_services(self) -> None:
         """Start background services."""
         # Start data fetcher
-        self.data_fetcher.daemon = True
         self.data_fetcher.start()
         
         # Trigger immediate refresh to load initial data quickly
@@ -382,6 +385,13 @@ class ETFMonitorApp(wx.App):
                 self.floating_window.cleanup()
                 self.floating_window.Destroy()
             
+            # Stop config watch timer
+            if hasattr(self, '_config_watch_timer') and getattr(self, '_config_watch_timer'):
+                try:
+                    self._config_watch_timer.Stop()
+                except Exception:
+                    pass
+            
             # Destroy tray icon
             if hasattr(self, 'tray_icon'):
                 self.logger.info("Destroying tray icon...")
@@ -445,4 +455,3 @@ class ETFMonitorApp(wx.App):
             self.logger.error(f"Error in OnExit: {e}")
         
         return 0
-

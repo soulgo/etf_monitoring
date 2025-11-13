@@ -144,30 +144,16 @@ class FloatingWindow(wx.Frame):
         self._font_size = self._calculate_font_size(self._window_height)
         base_font = wx.Font(self._font_size, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
 
-        self._name_label = wx.StaticText(self._panel, label="正在加载 ETF 数据...", style=wx.ALIGN_LEFT)
-        self._name_label.SetFont(base_font)
-
-        self._price_label = wx.StaticText(self._panel, label="", style=wx.ALIGN_LEFT)
-        self._price_label.SetFont(base_font)
-
-        self._percent_label = wx.StaticText(self._panel, label="", style=wx.ALIGN_LEFT)
-        self._percent_label.SetFont(base_font)
+        self._line_label = wx.StaticText(self._panel, label="正在加载 ETF 数据...", style=wx.ALIGN_CENTER)
+        self._line_label.SetFont(base_font)
 
         vbox = wx.BoxSizer(wx.VERTICAL)
-        vbox.Add(self._name_label, 0, wx.EXPAND | wx.ALL, 10)
-
-        hbox = wx.BoxSizer(wx.HORIZONTAL)
-        hbox.Add(self._price_label, 0, wx.ALIGN_LEFT)
-        hbox.AddSpacer(8)
-        hbox.Add(self._percent_label, 0, wx.ALIGN_LEFT)
-        vbox.Add(hbox, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+        vbox.Add(self._line_label, 1, wx.ALIGN_CENTER | wx.ALL, 10)
 
         self._panel.SetSizer(vbox)
 
         self._panel.SetBackgroundColour(wx.Colour(240, 248, 255))
-        self._name_label.SetForegroundColour(wx.Colour(0, 0, 0))
-        self._price_label.SetForegroundColour(wx.Colour(0, 0, 0))
-        self._percent_label.SetForegroundColour(wx.Colour(0, 0, 0))
+        self._line_label.SetForegroundColour(wx.Colour(0, 0, 0))
 
         self._panel.SetMinSize(wx.Size(self._min_width, self._min_height))
         frame_sizer = wx.BoxSizer(wx.VERTICAL)
@@ -267,12 +253,8 @@ class FloatingWindow(wx.Frame):
         if new_font_size != self._font_size:
             self._font_size = new_font_size
             font = wx.Font(self._font_size, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
-            if hasattr(self, '_name_label'):
-                self._name_label.SetFont(font)
-            if hasattr(self, '_price_label'):
-                self._price_label.SetFont(font)
-            if hasattr(self, '_percent_label'):
-                self._percent_label.SetFont(font)
+            if hasattr(self, '_line_label'):
+                self._line_label.SetFont(font)
 
     def _update_layout_metrics(self) -> None:
         padding = max(2, min(10, int(max(self._window_height, 1) * 0.15)))
@@ -288,7 +270,7 @@ class FloatingWindow(wx.Frame):
 
     def _ensure_text_fits(self) -> None:
         """确保文本在当前窗口尺寸下完整显示。"""
-        if not hasattr(self, '_name_label'):
+        if not hasattr(self, '_line_label'):
             return
         panel_size = self._panel.GetClientSize()
         avail_w = max(1, panel_size.GetWidth() - self._current_padding * 2)
@@ -310,19 +292,10 @@ class FloatingWindow(wx.Frame):
 
         min_pt = self._min_point_size
 
-        bottom_h = max(1, int(avail_h * 0.45))
-        name_h = max(1, avail_h - bottom_h)
-
-        price_text = self._price_label.GetLabel() or ""
-        percent_text = self._percent_label.GetLabel() or ""
-        price_pt = fit_label(self._price_label, price_text, int(avail_w * 0.6), bottom_h, min_pt)
-        percent_pt = fit_label(self._percent_label, percent_text, int(avail_w * 0.35), bottom_h, min_pt)
-
-        name_text = self._name_label.GetLabel() or ""
-        self._name_label.Wrap(avail_w)
-        name_pt = fit_label(self._name_label, name_text, avail_w, name_h, min_pt)
-
-        self._font_size = min(price_pt, percent_pt, name_pt)
+        line_text = self._line_label.GetLabel() or ""
+        self._line_label.Wrap(-1)
+        line_pt = fit_label(self._line_label, line_text, avail_w, avail_h, min_pt)
+        self._font_size = line_pt
         sizer = self._panel.GetSizer()
         if sizer:
             sizer.Layout()
@@ -400,7 +373,7 @@ class FloatingWindow(wx.Frame):
     def _bind_events(self):
         """绑定事件。"""
         # 鼠标拖动/缩放事件绑定到窗口及子控件
-        for widget in (self, self._panel, getattr(self, '_name_label', None), getattr(self, '_price_label', None), getattr(self, '_percent_label', None)):
+        for widget in (self, self._panel, getattr(self, '_line_label', None)):
             widget.Bind(wx.EVT_LEFT_DOWN, self._on_left_down)
             widget.Bind(wx.EVT_LEFT_UP, self._on_left_up)
             widget.Bind(wx.EVT_MOTION, self._on_mouse_move)
@@ -410,30 +383,18 @@ class FloatingWindow(wx.Frame):
         # 鼠标捕获丢失
         self.Bind(wx.EVT_MOUSE_CAPTURE_LOST, self._on_capture_lost)
         self._panel.Bind(wx.EVT_MOUSE_CAPTURE_LOST, self._on_capture_lost)
-        if hasattr(self, '_name_label'):
-            self._name_label.Bind(wx.EVT_MOUSE_CAPTURE_LOST, self._on_capture_lost)
-        if hasattr(self, '_price_label'):
-            self._price_label.Bind(wx.EVT_MOUSE_CAPTURE_LOST, self._on_capture_lost)
-        if hasattr(self, '_percent_label'):
-            self._percent_label.Bind(wx.EVT_MOUSE_CAPTURE_LOST, self._on_capture_lost)
+        if hasattr(self, '_line_label'):
+            self._line_label.Bind(wx.EVT_MOUSE_CAPTURE_LOST, self._on_capture_lost)
         
         # 右键菜单
         self._panel.Bind(wx.EVT_RIGHT_DOWN, self._on_right_click)
-        if hasattr(self, '_name_label'):
-            self._name_label.Bind(wx.EVT_RIGHT_DOWN, self._on_right_click)
-        if hasattr(self, '_price_label'):
-            self._price_label.Bind(wx.EVT_RIGHT_DOWN, self._on_right_click)
-        if hasattr(self, '_percent_label'):
-            self._percent_label.Bind(wx.EVT_RIGHT_DOWN, self._on_right_click)
+        if hasattr(self, '_line_label'):
+            self._line_label.Bind(wx.EVT_RIGHT_DOWN, self._on_right_click)
         
         # 双击隐藏
         self._panel.Bind(wx.EVT_LEFT_DCLICK, self._on_double_click)
-        if hasattr(self, '_name_label'):
-            self._name_label.Bind(wx.EVT_LEFT_DCLICK, self._on_double_click)
-        if hasattr(self, '_price_label'):
-            self._price_label.Bind(wx.EVT_LEFT_DCLICK, self._on_double_click)
-        if hasattr(self, '_percent_label'):
-            self._percent_label.Bind(wx.EVT_LEFT_DCLICK, self._on_double_click)
+        if hasattr(self, '_line_label'):
+            self._line_label.Bind(wx.EVT_LEFT_DCLICK, self._on_double_click)
         
         # 绑定关闭事件，阻止销毁，改为隐藏
         self.Bind(wx.EVT_CLOSE, self._on_close)
@@ -511,13 +472,9 @@ class FloatingWindow(wx.Frame):
         """数据加载超时检查。"""
         if not self._data_loaded:
             self._logger.warning("Data loading timeout - no data received after 10 seconds")
-            self._name_label.SetLabel("数据加载超时\n请检查网络连接")
-            self._price_label.SetLabel("")
-            self._percent_label.SetLabel("")
+            self._line_label.SetLabel("数据加载超时 请检查网络连接")
             self._panel.SetBackgroundColour(wx.Colour(255, 200, 150))
-            self._name_label.SetForegroundColour(wx.Colour(139, 0, 0))
-            self._price_label.SetForegroundColour(wx.Colour(139, 0, 0))
-            self._percent_label.SetForegroundColour(wx.Colour(139, 0, 0))
+            self._line_label.SetForegroundColour(wx.Colour(139, 0, 0))
             self._panel.Refresh()
     
     def _on_visibility_guard(self, event):
@@ -564,13 +521,9 @@ class FloatingWindow(wx.Frame):
         
         if not is_trading_time():
             trading_status = get_next_trading_time()
-            self._name_label.SetLabel("已收盘")
-            self._price_label.SetLabel("")
-            self._percent_label.SetLabel("")
+            self._line_label.SetLabel("已收盘")
             self._panel.SetBackgroundColour(wx.Colour(200, 200, 200))
-            self._name_label.SetForegroundColour(wx.Colour(80, 80, 80))
-            self._price_label.SetForegroundColour(wx.Colour(80, 80, 80))
-            self._percent_label.SetForegroundColour(wx.Colour(80, 80, 80))
+            self._line_label.SetForegroundColour(wx.Colour(80, 80, 80))
             self._panel.Refresh()
             self._relayout_components()
             self._logger.debug(f"[显示更新] 闭市状态: {trading_status}")
@@ -578,13 +531,9 @@ class FloatingWindow(wx.Frame):
         
         if not self._changed_etf_codes or not self._etf_data:
             # 显示更明显的加载提示
-            self._name_label.SetLabel("正在获取数据...")
-            self._price_label.SetLabel("")
-            self._percent_label.SetLabel("")
+            self._line_label.SetLabel("正在获取数据...")
             self._panel.SetBackgroundColour(wx.Colour(255, 250, 205))
-            self._name_label.SetForegroundColour(wx.Colour(0, 0, 0))
-            self._price_label.SetForegroundColour(wx.Colour(0, 0, 0))
-            self._percent_label.SetForegroundColour(wx.Colour(0, 0, 0))
+            self._line_label.SetForegroundColour(wx.Colour(0, 0, 0))
             self._panel.Refresh()
             self._relayout_components()
             self._logger.debug("No data available yet")
@@ -599,13 +548,9 @@ class FloatingWindow(wx.Frame):
         
         if not quote:
             # 数据项不存在，显示错误提示
-            self._name_label.SetLabel(f"数据错误: {code}")
-            self._price_label.SetLabel("")
-            self._percent_label.SetLabel("")
+            self._line_label.SetLabel(f"数据错误: {code}")
             self._panel.SetBackgroundColour(wx.Colour(255, 230, 230))
-            self._name_label.SetForegroundColour(wx.Colour(180, 0, 0))
-            self._price_label.SetForegroundColour(wx.Colour(180, 0, 0))
-            self._percent_label.SetForegroundColour(wx.Colour(180, 0, 0))
+            self._line_label.SetForegroundColour(wx.Colour(180, 0, 0))
             self._panel.Refresh()
             self._logger.warning(f"Quote data not found for {code}")
             return
@@ -615,9 +560,7 @@ class FloatingWindow(wx.Frame):
             percent_text = (f"+{p:.2f}%" if p > 0 else (f"-{abs(p):.2f}%" if p < 0 else "0.00%"))
             price_text = f"{quote.price:.2f}"
 
-            self._name_label.SetLabel(quote.name)
-            self._price_label.SetLabel(price_text)
-            self._percent_label.SetLabel(percent_text)
+            self._line_label.SetLabel(f"{quote.name} {price_text} {percent_text}")
             self._relayout_components()
             
             # 根据涨跌设置颜色（更鲜明的颜色）
@@ -630,9 +573,7 @@ class FloatingWindow(wx.Frame):
             else:
                 self._panel.SetBackgroundColour(wx.Colour(255, 255, 255))
                 fg = wx.Colour(0, 0, 0)
-            self._name_label.SetForegroundColour(fg)
-            self._price_label.SetForegroundColour(fg)
-            self._percent_label.SetForegroundColour(fg)
+            self._line_label.SetForegroundColour(fg)
             
             # 强制刷新显示
             self._panel.Refresh()
@@ -645,13 +586,9 @@ class FloatingWindow(wx.Frame):
             
         except Exception as e:
             self._logger.error(f"Error updating display: {e}", exc_info=True)
-            self._name_label.SetLabel("显示错误")
-            self._price_label.SetLabel("")
-            self._percent_label.SetLabel("")
+            self._line_label.SetLabel("显示错误")
             self._panel.SetBackgroundColour(wx.Colour(255, 230, 230))
-            self._name_label.SetForegroundColour(wx.Colour(180, 0, 0))
-            self._price_label.SetForegroundColour(wx.Colour(180, 0, 0))
-            self._percent_label.SetForegroundColour(wx.Colour(180, 0, 0))
+            self._line_label.SetForegroundColour(wx.Colour(180, 0, 0))
             self._panel.Refresh()
     
     def _on_left_down(self, event):
@@ -744,12 +681,8 @@ class FloatingWindow(wx.Frame):
                 
                 # 更新字体
                 font = wx.Font(self._font_size, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
-                if hasattr(self, '_name_label'):
-                    self._name_label.SetFont(font)
-                if hasattr(self, '_price_label'):
-                    self._price_label.SetFont(font)
-                if hasattr(self, '_percent_label'):
-                    self._percent_label.SetFont(font)
+                if hasattr(self, '_line_label'):
+                    self._line_label.SetFont(font)
                 
                 # 更新布局
                 self._panel.Layout()
@@ -892,12 +825,8 @@ class FloatingWindow(wx.Frame):
         if font_size is not None and font_size != self._font_size:
             self._font_size = font_size
             font = wx.Font(font_size, wx.FONTFAMILY_DEFAULT, wx.FONTSTYLE_NORMAL, wx.FONTWEIGHT_BOLD)
-            if hasattr(self, '_name_label'):
-                self._name_label.SetFont(font)
-            if hasattr(self, '_price_label'):
-                self._price_label.SetFont(font)
-            if hasattr(self, '_percent_label'):
-                self._percent_label.SetFont(font)
+            if hasattr(self, '_line_label'):
+                self._line_label.SetFont(font)
             self._panel.Layout()
             self._relayout_components()
         

@@ -82,8 +82,9 @@ class DataFetcher:
         self._last_fetch_time = 0
         self._last_fetch_duration = 0
         
-        # Thread pool for concurrent requests
+        # Thread pool for concurrent requests (persistently reused)
         self._max_workers = min(len(etf_codes), 10) if etf_codes else 1
+        self._executor: Optional[ThreadPoolExecutor] = None
     
     def start(self) -> None:
         """Start the fetcher thread."""
@@ -91,6 +92,9 @@ class DataFetcher:
             self._logger.warning("Fetcher already running")
             return
         
+        # Ensure executor is ready before starting loop
+        self._ensure_executor()
+
         self._running = True
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._fetch_loop, daemon=True)
@@ -112,6 +116,15 @@ class DataFetcher:
         
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=5)
+        
+        # Shutdown executor to release threads
+        if self._executor is not None:
+            try:
+                self._executor.shutdown(wait=False, cancel_futures=True)
+            except Exception:
+                pass
+            finally:
+                self._executor = None
         
         self._logger.info("Data fetcher stopped")
     
@@ -135,6 +148,7 @@ class DataFetcher:
         """
         self._etf_codes = etf_codes.copy()
         self._max_workers = min(len(etf_codes), 10) if etf_codes else 1
+        self._ensure_executor()
         self._logger.info(f"Updated ETF list: {len(etf_codes)} codes")
     
     def update_refresh_interval(self, interval: int) -> None:
@@ -157,7 +171,7 @@ class DataFetcher:
         """Main fetch loop running in background thread."""
         while self._running:
             try:
-                # Check if paused
+                # Pause handling
                 if self._paused:
                     self._logger.debug("Fetcher paused, waiting...")
                     self._pause_event.wait()
@@ -166,33 +180,23 @@ class DataFetcher:
                         break
                     continue
                 
-                # 检查交易时间
+                # Trading time check
                 trading = is_trading_time()
-                
                 if not trading:
-                    # 闭市后：停止API调用，等待60秒后再检查
                     wait_interval = 60
                     trading_status = get_next_trading_time()
                     self._logger.info(f"[闭市检测] {trading_status}，停止API调用，等待{wait_interval}秒")
-                    
-                    # 闭市后不调用 _fetch_all_quotes()，直接等待
                     if self._stop_event.wait(timeout=wait_interval):
                         break
                     continue
                 
-                # 开市状态：正常获取数据
+                # Perform fetch cycle
                 start_time = time.time()
                 self._fetch_all_quotes()
                 duration = time.time() - start_time
-                
-                # Update performance metrics
                 self._last_fetch_time = start_time
                 self._last_fetch_duration = duration
-                
-                self._logger.debug(
-                    f"Fetch completed in {duration:.2f}s "
-                    f"({len(self._etf_codes)} ETFs)"
-                )
+                self._logger.debug(f"Fetch completed in {duration:.2f}s ({len(self._etf_codes)} ETFs)")
                 
                 # Wait for next interval or stop event
                 if self._stop_event.wait(timeout=self._refresh_interval):
@@ -208,30 +212,25 @@ class DataFetcher:
         if not self._etf_codes:
             return
         
-        # Use ThreadPoolExecutor for concurrent requests
-        with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
-            # Submit all fetch tasks
-            future_to_code = {
-                executor.submit(self._fetch_single_quote, code): code
-                for code in self._etf_codes
-            }
-            
-            # Collect results
-            quotes = {}
-            changed_codes = []
-            
-            for future in as_completed(future_to_code):
-                code = future_to_code[future]
-                try:
-                    quote = future.result()
-                    if quote:
-                        quotes[code] = quote
-                        
-                        # Update cache and track changes
-                        if self._cache_manager.update(quote):
-                            changed_codes.append(code)
-                except Exception as e:
-                    self._logger.error(f"Error fetching {code}: {e}")
+        # Ensure executor exists and submit tasks
+        self._ensure_executor()
+        future_to_code = {
+            self._executor.submit(self._fetch_single_quote, code): code
+            for code in self._etf_codes
+        }
+        
+        quotes = {}
+        changed_codes = []
+        for future in as_completed(future_to_code):
+            code = future_to_code[future]
+            try:
+                quote = future.result()
+                if quote:
+                    quotes[code] = quote
+                    if self._cache_manager.update(quote):
+                        changed_codes.append(code)
+            except Exception as e:
+                self._logger.error(f"Error fetching {code}: {e}")
         
         # Invoke callback if data was fetched successfully
         if quotes and self._data_callback:
@@ -256,6 +255,19 @@ class DataFetcher:
                     self._logger.warning("[接口切换] 当前接口本轮无数据，暂无可用备用接口")
             except Exception as e:
                 self._logger.error(f"[接口切换] 自动切换失败: {e}")
+
+    def _ensure_executor(self) -> None:
+        """Ensure the persistent ThreadPoolExecutor is initialized with current max_workers."""
+        if self._executor is None:
+            self._executor = ThreadPoolExecutor(max_workers=self._max_workers, thread_name_prefix="fetcher")
+            return
+        # Recreate executor if worker count changed
+        try:
+            if getattr(self._executor, "_max_workers", self._max_workers) != self._max_workers:
+                self._executor.shutdown(wait=False, cancel_futures=True)
+                self._executor = ThreadPoolExecutor(max_workers=self._max_workers, thread_name_prefix="fetcher")
+        except Exception:
+            self._executor = ThreadPoolExecutor(max_workers=self._max_workers, thread_name_prefix="fetcher")
     
     def _fetch_single_quote(self, code: str) -> Optional[ETFQuote]:
         """
@@ -441,4 +453,3 @@ class DataFetcher:
             'last_fetch_time': self._last_fetch_time,
             'last_fetch_duration': self._last_fetch_duration,
         }
-
