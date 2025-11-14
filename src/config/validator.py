@@ -22,6 +22,34 @@ class ConfigValidator:
     
     # Valid notification types
     VALID_NOTIFICATION_TYPES = ['toast', 'popup', 'both']
+
+    @staticmethod
+    def validate_symbol(symbol: Any) -> Tuple[bool, Optional[str]]:
+        if not isinstance(symbol, str):
+            return False, "symbol must be a string"
+        if len(symbol) == 0:
+            return False, "symbol cannot be empty"
+        # 允许格式：AAPL、600519、600519.SH、TSLA.US 等
+        import re
+        if not re.match(r'^[A-Za-z0-9]{1,10}(\.[A-Za-z]{2})?$', symbol):
+            return False, f"invalid symbol: {symbol}"
+        return True, None
+
+    @staticmethod
+    def validate_symbol_entry(entry: Any) -> Tuple[bool, Optional[str]]:
+        if not isinstance(entry, dict):
+            return False, "symbols[*] must be an object"
+        ok, err = ConfigValidator.validate_symbol(entry.get('symbol'))
+        if not ok:
+            return False, err
+        for k in ['up_threshold', 'down_threshold']:
+            v = entry.get(k)
+            if not isinstance(v, (int, float)):
+                return False, f"{k} must be a number"
+        dur = entry.get('duration_secs')
+        if dur is not None and not isinstance(dur, int):
+            return False, "duration_secs must be an integer"
+        return True, None
     
     @staticmethod
     def validate_etf_code(code: str) -> Tuple[bool, Optional[str]]:
@@ -150,6 +178,17 @@ class ConfigValidator:
             is_valid, error = cls.validate_etf_list(config['etf_list'])
             if not is_valid:
                 errors.append(error)
+
+        # Validate symbols
+        if 'symbols' in config:
+            symbols = config['symbols']
+            if not isinstance(symbols, list):
+                errors.append("symbols must be a list")
+            else:
+                for entry in symbols:
+                    ok, err = cls.validate_symbol_entry(entry)
+                    if not ok:
+                        errors.append(err)
         
         # Validate refresh_interval
         if 'refresh_interval' in config:

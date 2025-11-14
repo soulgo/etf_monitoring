@@ -14,6 +14,7 @@ import httpx
 from .models import ETFQuote
 from ..utils.logger import get_logger
 from ..utils.helpers import get_market_prefix
+from ..utils.helpers import parse_symbol
 
 
 class QuoteAPIAdapter(ABC):
@@ -645,4 +646,115 @@ class APIAdapterFactory:
                 base_url = base_url.replace('http://', 'https://', 1)
         
         return adapter_class(base_url, timeout)
+
+
+class YahooAdapter(QuoteAPIAdapter):
+    def fetch_quote(self, code: str) -> Optional[ETFQuote]:
+        try:
+            url = f"https://query1.finance.yahoo.com/v7/finance/quote"
+            params = {"symbols": code}
+            headers = {
+                'User-Agent': 'Mozilla/5.0'
+            }
+            response = self.client.get(url, params=params, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+            results = data.get('quoteResponse', {}).get('result', [])
+            if not results:
+                return None
+            q = results[0]
+            name = q.get('shortName') or q.get('longName') or code
+            price = q.get('regularMarketPrice')
+            pre_close = q.get('regularMarketPreviousClose')
+            change = q.get('regularMarketChange')
+            change_percent = q.get('regularMarketChangePercent')
+            volume = q.get('regularMarketVolume') or 0
+            ts = q.get('regularMarketTime') or int(time.time())
+            if price is None or pre_close is None:
+                return None
+            if change_percent is None and pre_close:
+                try:
+                    change_percent = ((float(price) - float(pre_close)) / float(pre_close)) * 100.0
+                    change = float(price) - float(pre_close)
+                except Exception:
+                    change_percent = 0.0
+                    change = 0.0
+            update_time = datetime.fromtimestamp(ts).strftime("%H:%M:%S")
+            return ETFQuote(
+                code=code,
+                name=name,
+                price=float(price),
+                change=float(change or 0.0),
+                change_percent=float(change_percent or 0.0),
+                volume=int(volume),
+                pre_close=float(pre_close),
+                update_time=update_time,
+                timestamp=time.time()
+            )
+        except httpx.TimeoutException:
+            return None
+        except httpx.HTTPError:
+            return None
+        except Exception:
+            return None
+
+
+class CompositeAdapter(QuoteAPIAdapter):
+    def __init__(self, base_url: str = "", timeout: int = 5):
+        super().__init__(base_url, timeout)
+        self._cn_adapter = EastMoneyAdapter('https://push2.eastmoney.com/api/qt/stock/get', timeout)
+        self._us_adapter = YahooAdapter('', timeout)
+        self._fallback = SinaAdapter('http://hq.sinajs.cn/list=', timeout)
+
+    def fetch_quote(self, code: str) -> Optional[ETFQuote]:
+        """
+        综合适配器：
+        - A股：优先使用东方财富，如果价格<=0或无数据，则回退到新浪
+        - 美股：使用 Yahoo 适配器
+        """
+        market, core = parse_symbol(code)
+
+        # A股（带 SH/SZ 后缀或纯数字代码）
+        if market in ['SH', 'SZ'] or core.isdigit():
+            # 先尝试东方财富
+            quote = self._cn_adapter.fetch_quote(core)
+
+            # 东方财富返回正常价格，直接使用
+            if quote and quote.price is not None and quote.price > 0:
+                return quote
+
+            # 东方财富返回空或价格异常，尝试新浪兜底
+            if quote is not None:
+                self.logger.warning(
+                    f"[Composite] EastMoney returned invalid price for {code}: {quote.price}, fallback to Sina"
+                )
+            else:
+                self.logger.warning(
+                    f"[Composite] EastMoney returned no data for {code}, fallback to Sina"
+                )
+
+            fallback_quote = self._fallback.fetch_quote(core)
+            if fallback_quote:
+                return fallback_quote
+
+            # 新浪也失败时，最后返回东方财富结果（可能为 None 或价格异常），
+            # 交给上层做进一步处理/降级显示
+            return quote
+
+        # 其它（如美股）直接走 Yahoo
+        return self._us_adapter.fetch_quote(code)
+
+    def close(self):
+        try:
+            self._cn_adapter.close()
+        except Exception:
+            pass
+        try:
+            self._us_adapter.close()
+        except Exception:
+            pass
+
+# 注册新适配器
+APIAdapterFactory.ADAPTERS['yahoo'] = YahooAdapter
+APIAdapterFactory.ADAPTERS['composite'] = CompositeAdapter
 

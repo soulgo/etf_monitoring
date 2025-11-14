@@ -30,11 +30,13 @@ class ConfigManager:
     
     # Default configuration file paths
     DEFAULT_CONFIG_FILE = "config.json"
+    DEFAULT_CONFIG_YAML = "config.yaml"
     DEFAULT_CONFIG_TEMPLATE = "config.default.json"
     
     # Default configuration values
     DEFAULT_CONFIG = {
         "config_version": "1.0",
+        "symbols": [],
         "etf_list": [],
         "refresh_interval": 5,
         "rotation_interval": 3,
@@ -122,7 +124,17 @@ class ConfigManager:
         if config_file:
             self._config_file = config_file
         
-        config_path = Path(self._config_file)
+        # 自动选择 YAML 或 JSON
+        yaml_path = Path(self.DEFAULT_CONFIG_YAML)
+        json_path = Path(self._config_file)
+        if not config_file:
+            if yaml_path.exists():
+                self._config_file = self.DEFAULT_CONFIG_YAML
+                config_path = yaml_path
+            else:
+                config_path = json_path
+        else:
+            config_path = Path(self._config_file)
         
         # If config doesn't exist, create from template or defaults
         if not config_path.exists():
@@ -130,8 +142,13 @@ class ConfigManager:
             return self._create_default_config()
         
         try:
-            with open(config_path, 'r', encoding='utf-8') as f:
-                loaded_config = json.load(f)
+            if config_path.suffix.lower() in [".yml", ".yaml"]:
+                import yaml
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    loaded_config = yaml.safe_load(f) or {}
+            else:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    loaded_config = json.load(f)
             
             # Validate configuration
             is_valid, errors = ConfigValidator.validate_config(loaded_config)
@@ -159,7 +176,7 @@ class ConfigManager:
             self._logger.warning("Using default configuration")
             self._config = self.DEFAULT_CONFIG.copy()
             return False
-            
+        
         except Exception as e:
             self._logger.error(f"Failed to load config: {e}")
             self._config = self.DEFAULT_CONFIG.copy()

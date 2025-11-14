@@ -36,9 +36,8 @@ class ETFQuote:
     timestamp: float
     
     def __post_init__(self):
-        """Validate required fields."""
-        if not self.code or len(self.code) != 6:
-            raise ValueError(f"Invalid ETF code: {self.code}")
+        if not self.code:
+            raise ValueError("Invalid code")
         
         if not self.name:
             raise ValueError("ETF name cannot be empty")

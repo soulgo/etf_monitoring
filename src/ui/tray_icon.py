@@ -122,6 +122,9 @@ class ETFTrayIcon(wx.adv.TaskBarIcon):
         # 绑定菜单销毁事件以恢复守护
         menu.Bind(wx.EVT_MENU_CLOSE, self._on_menu_close)
 
+        manage_item = menu.Append(wx.ID_ANY, "管理")
+        menu.Bind(wx.EVT_MENU, self._on_manage, manage_item)
+
         item = menu.Append(wx.ID_EXIT, "退出")
         menu.Bind(wx.EVT_MENU, self._on_exit, item)
         
@@ -281,6 +284,16 @@ class ETFTrayIcon(wx.adv.TaskBarIcon):
     def set_on_menu_close(self, callback: Callable) -> None:
         """Set menu close callback (called when tray menu closes)."""
         self._on_menu_close_callback = callback
+
+    def set_on_manage(self, callback: Callable) -> None:
+        self._on_manage_callback = callback
+
+    def _on_manage(self, event) -> None:
+        if hasattr(self, '_on_manage_callback') and self._on_manage_callback:
+            try:
+                self._on_manage_callback()
+            except Exception as e:
+                self._logger.error(f"Error in manage callback: {e}")
     
     def _on_menu_close(self, event) -> None:
         """Handle menu close event."""

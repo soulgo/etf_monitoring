@@ -353,23 +353,28 @@ class FloatingWindow(wx.Frame):
     def _ensure_always_on_top(self):
         """确保窗口始终置顶（使用多种方法组合）。"""
         try:
+            # 如果窗口守护已暂停（例如显示对话框时），避免抢占焦点
+            if getattr(self, "_guard_paused", False) or getattr(self, "_user_hidden", False):
+                self._logger.debug("Skip always-on-top adjustments because guard is paused or window hidden")
+                return
+
             # 方法1: 使用 Raise() 提升窗口
             self.Raise()
-            
+
             # 方法2: 重新设置窗口样式（强制应用STAY_ON_TOP）
             current_style = self.GetWindowStyle()
             # 先移除STAY_ON_TOP，再重新添加（强制刷新）
             if current_style & wx.STAY_ON_TOP:
                 self.SetWindowStyle(current_style & ~wx.STAY_ON_TOP)
             self.SetWindowStyle(current_style | wx.STAY_ON_TOP)
-            
+
             # 方法3: 再次调用Raise()确保生效
             self.Raise()
-            
+
             self._logger.debug("Window raised to always on top")
         except Exception as e:
             self._logger.warning(f"Failed to ensure always on top: {e}")
-    
+
     def _bind_events(self):
         """绑定事件。"""
         # 鼠标拖动/缩放事件绑定到窗口及子控件
@@ -562,7 +567,7 @@ class FloatingWindow(wx.Frame):
 
             self._line_label.SetLabel(f"{quote.name} {price_text} {percent_text}")
             self._relayout_components()
-            
+
             # 根据涨跌设置颜色（更鲜明的颜色）
             if quote.change_percent > 0:
                 self._panel.SetBackgroundColour(wx.Colour(255, 200, 200))
@@ -574,16 +579,17 @@ class FloatingWindow(wx.Frame):
                 self._panel.SetBackgroundColour(wx.Colour(255, 255, 255))
                 fg = wx.Colour(0, 0, 0)
             self._line_label.SetForegroundColour(fg)
-            
+
             # 强制刷新显示
             self._panel.Refresh()
             self._panel.Update()
-            
-            # 确保窗口保持在最顶层
-            self.Raise()
-            
+
+            # 窗口守护被暂停时，不要抢占焦点
+            if not getattr(self, "_guard_paused", False) and not self._user_hidden:
+                self.Raise()
+
             self._logger.debug("Display updated")
-            
+
         except Exception as e:
             self._logger.error(f"Error updating display: {e}", exc_info=True)
             self._line_label.SetLabel("显示错误")
@@ -720,11 +726,11 @@ class FloatingWindow(wx.Frame):
 
     def _on_mouse_enter(self, event):
         """鼠标进入窗口区域 - 确保窗口置顶。"""
-        # 鼠标进入时，确保窗口在最顶层（防止被任务栏遮挡）
-        if not self._user_hidden:
+        # 鼠标进入时，确保窗口在最顶层（防止被任务栏遮挡）。窗口守护暂停时不要抢占焦点
+        if not self._user_hidden and not getattr(self, "_guard_paused", False):
             self.Raise()
         event.Skip()
-    
+
     def _on_mouse_leave(self, event):
         """鼠标离开窗口区域。"""
         if not self._dragging and not self._resizing:
@@ -783,6 +789,20 @@ class FloatingWindow(wx.Frame):
         menu.Bind(wx.EVT_MENU, lambda e: self._reset_size(), reset_size_item)
         
         menu.AppendSeparator()
+
+        # 管理页面
+        manage_item = menu.Append(wx.ID_ANY, "管理")
+        def _open_manage(evt):
+            try:
+                app = wx.GetApp()
+                if hasattr(app, '_open_stock_manager'):
+                    app._open_stock_manager()
+            except Exception as e:
+                try:
+                    wx.MessageBox(f"打开管理页面失败: {e}", "错误", wx.OK | wx.ICON_ERROR)
+                except Exception:
+                    pass
+        menu.Bind(wx.EVT_MENU, _open_manage, manage_item)
         
         # 透明度
         transparency_menu = wx.Menu()

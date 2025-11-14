@@ -15,6 +15,7 @@ from .data.cache import CacheManager
 from .ui.tray_icon import ETFTrayIcon
 from .ui.floating_window import FloatingWindow
 from .utils.logger import setup_logger, get_logger
+from .alerts.manager import AlertManager
 
 class ETFMonitorApp(wx.App):
     """
@@ -86,8 +87,12 @@ class ETFMonitorApp(wx.App):
         
         # Primary adapter
         primary_config = api_config.get('primary', {})
+        adapter_name = primary_config.get('name', 'eastmoney')
+        symbols_cfg = self.config.get('symbols', [])
+        if symbols_cfg:
+            adapter_name = 'composite'
         self.primary_adapter = APIAdapterFactory.create(
-            primary_config.get('name', 'eastmoney'),
+            adapter_name,
             primary_config.get('base_url', ''),
             primary_config.get('timeout', 5)
         )
@@ -108,8 +113,16 @@ class ETFMonitorApp(wx.App):
             f"API adapters initialized: 1 primary, {len(self.backup_adapters)} backup"
         )
         
-        # Initialize data fetcher
+        # Initialize data fetcher - handle both symbols (dict) and etf_list (string) formats
+        symbols_list = self.config.get('symbols', [])
         etf_list = self.config.get('etf_list', [])
+
+        # Extract codes from symbols list (which contains dicts) or use etf_list (which contains strings)
+        if symbols_list:
+            codes_list = [s.get('symbol') if isinstance(s, dict) else s for s in symbols_list]
+        else:
+            codes_list = etf_list
+
         refresh_interval = self.config.get('refresh_interval', 5)
         retry_count = api_config.get('retry_count', 3)
         retry_interval = api_config.get('retry_interval', 1)
@@ -120,7 +133,7 @@ class ETFMonitorApp(wx.App):
             raise RuntimeError("Failed to initialize primary API adapter")
         
         self.data_fetcher = DataFetcher(
-            etf_codes=etf_list,
+            etf_codes=codes_list,
             primary_adapter=self.primary_adapter,
             backup_adapters=self.backup_adapters,
             cache_manager=self.cache_manager,
@@ -130,7 +143,7 @@ class ETFMonitorApp(wx.App):
             failover_threshold=failover_threshold,
             data_callback=self._on_data_updated
         )
-        self.logger.info(f"Data fetcher initialized: {len(etf_list)} ETFs")
+        self.logger.info(f"Data fetcher initialized: {len(codes_list)} symbols")
         
         # Initialize tray icon
         display_config = self.config.get('display_config', {})
@@ -145,6 +158,7 @@ class ETFMonitorApp(wx.App):
         self.tray_icon.set_on_exit(self._on_exit)
         self.tray_icon.set_on_menu_open(self._on_tray_menu_open)
         self.tray_icon.set_on_menu_close(self._on_tray_menu_close)
+        self.tray_icon.set_on_manage(self._open_stock_manager)
         
         self.logger.info("Tray icon initialized")
         
@@ -174,6 +188,8 @@ class ETFMonitorApp(wx.App):
         # Ensure detail_window attribute exists to avoid callback errors
         if not hasattr(self, 'detail_window'):
             self.detail_window = None
+        self.alert_manager = AlertManager(self.config)
+        self.stock_manager_frame = None
     
     def _start_services(self) -> None:
         """Start background services."""
@@ -233,6 +249,11 @@ class ETFMonitorApp(wx.App):
         else:
             self.logger.warning("Floating window is None, cannot update")
         
+        # Alerts
+        try:
+            self.alert_manager.evaluate(etf_data, changed_codes)
+        except Exception:
+            pass
         # Update detail window if visible
         if self.detail_window and self.detail_window.IsShown():
             self.detail_window.update_data(etf_data)
@@ -253,6 +274,17 @@ class ETFMonitorApp(wx.App):
             except Exception:
                 self.floating_window.resume_guard()
                 self.logger.info("[托盘菜单] 菜单关闭，恢复悬浮窗守护")
+
+    def _open_stock_manager(self) -> None:
+        try:
+            from .ui.stock_manager import StockManagerFrame
+            if self.stock_manager_frame and self.stock_manager_frame.IsShown():
+                self.stock_manager_frame.Raise()
+                return
+            self.stock_manager_frame = StockManagerFrame(self)
+            self.stock_manager_frame.Show(True)
+        except Exception as e:
+            self.logger.error(f"Open stock manager failed: {e}")
     
     def _on_exit(self) -> None:
         """Handle application exit."""
@@ -282,14 +314,22 @@ class ETFMonitorApp(wx.App):
     def _reload_configuration(self) -> None:
         """Reload configuration and restart services."""
         self.logger.info("[配置重载] 开始重新加载配置...")
-        
+
         # Reload config
         self.config.reload()
-        
-        # Update ETF list
+
+        # Update symbols list - handle both formats
+        symbols_list = self.config.get('symbols', [])
         etf_list = self.config.get('etf_list', [])
-        self.data_fetcher.update_etf_list(etf_list)
-        self.logger.info(f"[配置重载] ETF列表已更新: {len(etf_list)} 个 - {', '.join(etf_list)}")
+
+        # Extract codes from symbols list (which contains dicts) or use etf_list (which contains strings)
+        if symbols_list:
+            codes_list = [s.get('symbol') if isinstance(s, dict) else s for s in symbols_list]
+        else:
+            codes_list = etf_list
+
+        self.data_fetcher.update_etf_list(codes_list)
+        self.logger.info(f"[配置重载] 列表已更新: {len(codes_list)} 个 - {', '.join(codes_list)}")
         
         # Update refresh interval
         refresh_interval = self.config.get('refresh_interval', 5)

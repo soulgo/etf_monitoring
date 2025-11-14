@@ -3,8 +3,10 @@ Helper functions for data formatting, validation, and common operations.
 """
 
 import re
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Callable, List
 import wx
+import time
+import threading
 
 
 def format_price(price: Optional[float]) -> str:
@@ -130,6 +132,15 @@ def get_market_prefix(code: str) -> str:
     else:
         # Default to Shanghai for unknown patterns
         return "1"
+
+def parse_symbol(symbol: str) -> Tuple[str, str]:
+    market = ""
+    core = symbol
+    if "." in symbol:
+        parts = symbol.split(".")
+        core = parts[0]
+        market = parts[1].upper()
+    return market, core
 
 
 def get_color_for_change(change_percent: Optional[float]) -> str:
@@ -314,3 +325,72 @@ def get_icon_color_for_change(change_percent: float) -> Tuple[Tuple[int, int, in
     else:
         # 平盘 - 浅灰背景，更深的灰色文字
         return (240, 240, 240), (60, 60, 60)
+
+
+class Debouncer:
+    def __init__(self):
+        self._last = {}
+
+    def allow(self, key: str, interval_ms: int) -> bool:
+        now = time.perf_counter()
+        last = self._last.get(key, 0.0)
+        if (now - last) * 1000 < interval_ms:
+            return False
+        self._last[key] = now
+        return True
+
+
+def set_button_loading(btn: wx.Button, loading: bool):
+    if loading:
+        orig = getattr(btn, "_orig_label", None)
+        if orig is None:
+            setattr(btn, "_orig_label", btn.GetLabel())
+        btn.SetLabel("处理中…")
+        btn.SetBackgroundColour(wx.Colour(255, 245, 200))
+        btn.Refresh()
+    else:
+        orig = getattr(btn, "_orig_label", None)
+        if orig is not None:
+            btn.SetLabel(orig)
+        btn.SetBackgroundColour(wx.NullColour)
+        btn.Refresh()
+
+
+def run_with_guard(
+    button: wx.Button,
+    group_buttons: List[wx.Button],
+    fn: Callable[[], None],
+    on_success: Optional[Callable[[], None]] = None,
+    on_error: Optional[Callable[[Exception], None]] = None,
+):
+    set_button_loading(button, True)
+    for b in group_buttons:
+        try:
+            b.Disable()
+        except Exception:
+            pass
+
+    def _runner():
+        err: Optional[Exception] = None
+        try:
+            fn()
+        except Exception as e:
+            err = e
+
+        def _finish():
+            set_button_loading(button, False)
+            for b in group_buttons:
+                try:
+                    b.Enable()
+                except Exception:
+                    pass
+            if err is None:
+                if on_success:
+                    on_success()
+            else:
+                if on_error:
+                    on_error(err)
+
+        wx.CallAfter(_finish)
+
+    threading.Thread(target=_runner, daemon=True).start()
