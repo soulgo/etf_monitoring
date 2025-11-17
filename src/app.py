@@ -252,8 +252,8 @@ class ETFMonitorApp(wx.App):
         # Alerts
         try:
             self.alert_manager.evaluate(etf_data, changed_codes)
-        except Exception:
-            pass
+        except Exception as e:
+            self.logger.error(f"Alert evaluation failed: {e}", exc_info=True)
         # Update detail window if visible
         if self.detail_window and self.detail_window.IsShown():
             self.detail_window.update_data(etf_data)

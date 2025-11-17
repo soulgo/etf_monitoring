@@ -289,8 +289,8 @@ class StockManagerFrame(wx.Frame):
                         data.append({
                             'symbol': code.strip(),
                             'name': name,
-                            'up_threshold': 0.0,
-                            'down_threshold': 0.0,
+                            'up_thresholds': [],
+                            'down_thresholds': [],
                             'duration_secs': 5
                         })
                         self._logger.info(f"[配置加载] 迁移股票: {code} -> {name}")
@@ -313,11 +313,26 @@ class StockManagerFrame(wx.Frame):
                 continue
 
             # Ensure all required fields exist with defaults
+            # Migration: support both old (single value) and new (list) format
+            up_th = s.get('up_thresholds', s.get('up_threshold', []))
+            down_th = s.get('down_thresholds', s.get('down_threshold', []))
+            
+            # Convert single value to list for backward compatibility
+            if isinstance(up_th, (int, float)):
+                up_th = [float(up_th)] if up_th > 0 else []
+            elif not isinstance(up_th, list):
+                up_th = []
+            
+            if isinstance(down_th, (int, float)):
+                down_th = [float(down_th)] if down_th > 0 else []
+            elif not isinstance(down_th, list):
+                down_th = []
+            
             normalized = {
                 'symbol': s.get('symbol'),
                 'name': s.get('name', ''),
-                'up_threshold': float(s.get('up_threshold', 0.0)),
-                'down_threshold': float(s.get('down_threshold', 0.0)),
+                'up_thresholds': up_th,
+                'down_thresholds': down_th,
                 'duration_secs': int(s.get('duration_secs', 5))
             }
             validated_symbols.append(normalized)
@@ -436,8 +451,15 @@ class StockManagerFrame(wx.Frame):
             self._grid.SetCellValue(i, 0, code)
             self._grid.SetCellValue(i, 1, name)
             self._grid.SetCellValue(i, 2, price)
-            self._grid.SetCellValue(i, 3, str(s.get('up_threshold', '')))
-            self._grid.SetCellValue(i, 4, str(s.get('down_threshold', '')))
+            
+            # Format thresholds as comma-separated lists
+            up_thresholds = s.get('up_thresholds', [])
+            down_thresholds = s.get('down_thresholds', [])
+            up_str = ', '.join([str(t) for t in up_thresholds]) if up_thresholds else ''
+            down_str = ', '.join([str(t) for t in down_thresholds]) if down_thresholds else ''
+            
+            self._grid.SetCellValue(i, 3, up_str)
+            self._grid.SetCellValue(i, 4, down_str)
             self._grid.SetCellValue(i, 5, str(s.get('duration_secs', '')))
             self._grid.SetCellValue(i, 6, "✏️ 编辑")
             self._grid.SetCellValue(i, 7, "🗑️ 删除")
@@ -800,8 +822,8 @@ class StockManagerFrame(wx.Frame):
                     new_symbol = {
                         'symbol': code,
                         'name': name,
-                        'up_threshold': 0.0,
-                        'down_threshold': 0.0,
+                        'up_thresholds': [],
+                        'down_thresholds': [],
                         'duration_secs': 5
                     }
                     self._symbols.append(new_symbol)
@@ -898,8 +920,8 @@ class StockManagerFrame(wx.Frame):
                 values = dlg.get_values()
 
                 # Update symbol data
-                s['up_threshold'] = values['up_threshold']
-                s['down_threshold'] = values['down_threshold']
+                s['up_thresholds'] = values['up_thresholds']
+                s['down_thresholds'] = values['down_thresholds']
                 s['duration_secs'] = values['duration_secs']
 
                 self._logger.info(f"[编辑股票] 更新配置: {code} -> {values}")

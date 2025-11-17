@@ -90,21 +90,25 @@ class ModernEditDialog(wx.Dialog):
         """Create form with validation."""
         form_sizer = wx.BoxSizer(wx.VERTICAL)
         
-        # Up threshold field
+        # Up threshold field (now supports multiple values)
+        up_thresholds = self.stock_data.get('up_thresholds', [])
+        up_str = ', '.join([str(t) for t in up_thresholds]) if up_thresholds else ''
         up_sizer, self.up_ctrl, self.up_error = self._create_field(
             parent,
             "上涨阈值 (%)",
-            str(self.stock_data.get('up_threshold', 0.0)),
-            "当价格上涨超过此百分比时触发提醒"
+            up_str,
+            "多个阈值用逗号分隔，例如: 2, 3, 5"
         )
         form_sizer.Add(up_sizer, 0, wx.EXPAND | wx.BOTTOM, Spacing.MD)
         
-        # Down threshold field
+        # Down threshold field (now supports multiple values)
+        down_thresholds = self.stock_data.get('down_thresholds', [])
+        down_str = ', '.join([str(t) for t in down_thresholds]) if down_thresholds else ''
         down_sizer, self.down_ctrl, self.down_error = self._create_field(
             parent,
             "下跌阈值 (%)",
-            str(self.stock_data.get('down_threshold', 0.0)),
-            "当价格下跌超过此百分比时触发提醒"
+            down_str,
+            "多个阈值用逗号分隔，例如: 2.5, 4"
         )
         form_sizer.Add(down_sizer, 0, wx.EXPAND | wx.BOTTOM, Spacing.MD)
         
@@ -197,26 +201,45 @@ class ModernEditDialog(wx.Dialog):
 
     def _validate_threshold(self, value: str, field_name: str) -> Optional[str]:
         """
-        Validate threshold value.
+        Validate threshold value(s). Supports comma-separated values.
 
         Returns:
             Error message if invalid, None if valid
         """
         if not value.strip():
-            return "此字段不能为空"
+            # Empty is allowed (no thresholds)
+            if field_name in self.validation_errors:
+                del self.validation_errors[field_name]
+            return None
 
         try:
-            num = float(value)
-            if num < 0:
-                return "阈值不能为负数"
-            if num > 100:
-                return "阈值不能超过 100%"
+            # Split by comma and validate each value
+            parts = [p.strip() for p in value.split(',')]
+            thresholds = []
+            
+            for part in parts:
+                if not part:
+                    continue
+                    
+                num = float(part)
+                if num < 0:
+                    return f"阈值不能为负数: {part}"
+                if num > 100:
+                    return f"阈值不能超过 100%: {part}"
+                thresholds.append(num)
+            
+            if not thresholds:
+                # If after parsing we have no valid thresholds, that's ok
+                if field_name in self.validation_errors:
+                    del self.validation_errors[field_name]
+                return None
+            
             # Clear error
             if field_name in self.validation_errors:
                 del self.validation_errors[field_name]
             return None
-        except ValueError:
-            return "请输入有效的数字"
+        except ValueError as e:
+            return f"请输入有效的数字: {str(e)}"
 
     def _validate_duration(self, value: str) -> Optional[str]:
         """
@@ -286,9 +309,21 @@ class ModernEditDialog(wx.Dialog):
 
     def get_values(self) -> dict:
         """Get validated form values."""
+        # Parse comma-separated thresholds
+        up_str = self.up_ctrl.GetValue().strip()
+        down_str = self.down_ctrl.GetValue().strip()
+        
+        up_thresholds = []
+        if up_str:
+            up_thresholds = [float(p.strip()) for p in up_str.split(',') if p.strip()]
+        
+        down_thresholds = []
+        if down_str:
+            down_thresholds = [float(p.strip()) for p in down_str.split(',') if p.strip()]
+        
         return {
-            'up_threshold': float(self.up_ctrl.GetValue()),
-            'down_threshold': float(self.down_ctrl.GetValue()),
+            'up_thresholds': up_thresholds,
+            'down_thresholds': down_thresholds,
             'duration_secs': int(self.dur_ctrl.GetValue())
         }
 
