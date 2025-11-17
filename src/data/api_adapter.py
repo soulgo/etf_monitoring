@@ -68,10 +68,32 @@ class QuoteAPIAdapter(ABC):
 class EastMoneyAdapter(QuoteAPIAdapter):
     """
     Adapter for EastMoney (东方财富) API.
-    
-    API: http://push2.eastmoney.com/api/qt/stock/get
-    Fields: f57=code, f58=name, f43=price, f44=change, f45=change_percent,
-            f46=volume, f60=pre_close, f152=update_time
+
+    Purpose: Primary data source for A-share real-time quotes
+    API Endpoint: https://push2.eastmoney.com/api/qt/stock/get
+    Protocol: HTTPS (secure)
+
+    Request Parameters:
+    - secid: Market prefix + code (e.g., "1.512170" for Shanghai)
+    - fields: Comma-separated field codes
+
+    Response Fields:
+    - f57: Stock code
+    - f58: Stock name
+    - f43: Current price (÷100 required)
+    - f44: Price change (÷100 required)
+    - f45: Change percentage
+    - f46: Trading volume
+    - f60: Previous close price (÷100 required)
+    - f152: Update time
+
+    Rate Limits: Moderate, suitable for 5-second refresh intervals
+    Caching: Recommended 3-5 seconds to reduce load
+
+    Error Codes:
+    - 403: Rate limit exceeded or blocked
+    - 502: Server temporarily unavailable
+    - Timeout: Network issues or server overload
     """
     
     def fetch_quote(self, code: str) -> Optional[ETFQuote]:
@@ -603,22 +625,124 @@ class XueqiuAdapter(QuoteAPIAdapter):
             return None
 
 
+class NetEase163Adapter(QuoteAPIAdapter):
+    """
+    Adapter for NetEase 163 Finance (网易财经) API.
+
+    Purpose: Additional backup for A-share real-time quotes with reliable data
+    API: http://api.money.126.net/data/feed/
+    Rate Limit: Moderate, suitable for backup scenarios
+
+    Response Format:
+    - Returns JavaScript callback with JSON data
+    - Fields: name, price, updown, percent, volume, etc.
+
+    Error Handling:
+    - Timeout: Returns None
+    - HTTP errors: Returns None with logging
+    - Parse errors: Returns None with logging
+    """
+
+    def fetch_quote(self, code: str) -> Optional[ETFQuote]:
+        """
+        Fetch quote from NetEase 163 Finance API.
+
+        Args:
+            code: 6-digit ETF code
+
+        Returns:
+            ETFQuote object or None if failed
+
+        Example Response:
+            _ntes_quote_callback({"0512170":{"name":"医疗ETF","price":1.234,...}});
+        """
+        try:
+            # Get market prefix for 163
+            market = get_market_prefix(code)
+            # 163 uses 0 for Shanghai, 1 for Shenzhen (opposite of EastMoney)
+            market_code = '0' if market == '1' else '1'
+            symbol = f"{market_code}{code}"
+
+            # Build request URL
+            url = f"{self.base_url}{symbol}"
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Referer': 'http://quotes.money.163.com/'
+            }
+
+            response = self.client.get(url, headers=headers)
+            response.raise_for_status()
+
+            # Parse JSONP response
+            text = response.text
+            # Remove callback wrapper: _ntes_quote_callback({...});
+            if '_ntes_quote_callback(' in text:
+                text = text.split('_ntes_quote_callback(')[1].rsplit(');', 1)[0]
+
+            import json
+            data = json.loads(text)
+
+            # Get quote data
+            quote_data = data.get(symbol, {})
+            if not quote_data:
+                self.logger.warning(f"[163] No data for {code}")
+                return None
+
+            name = quote_data.get('name', code)
+            price = float(quote_data.get('price', 0))
+            pre_close = float(quote_data.get('yestclose', 0))
+            change = float(quote_data.get('updown', 0))
+            change_percent = float(quote_data.get('percent', 0))
+            volume = int(float(quote_data.get('volume', 0)))
+            update_time = quote_data.get('time', datetime.now().strftime("%H:%M:%S"))
+
+            if price <= 0 or pre_close <= 0:
+                self.logger.warning(f"[163] Invalid price data for {code}: price={price}, pre_close={pre_close}")
+                return None
+
+            return ETFQuote(
+                code=code,
+                name=name,
+                price=price,
+                change=change,
+                change_percent=change_percent,
+                volume=volume,
+                pre_close=pre_close,
+                update_time=update_time,
+                timestamp=time.time()
+            )
+
+        except httpx.TimeoutException:
+            self.logger.warning(f"[163] Timeout fetching {code}")
+            return None
+        except httpx.HTTPStatusError as e:
+            self.logger.error(f"[163] HTTP error {e.response.status_code} for {code}")
+            return None
+        except Exception as e:
+            self.logger.error(f"[163] Failed to fetch {code}: {e}")
+            return None
+
+
 class APIAdapterFactory:
     """
     Factory for creating API adapters based on configuration.
-    
+
     Supported adapters:
-    - eastmoney: 东方财富 (EastMoney)
-    - sina: 新浪财经 (Sina Finance)
-    - tencent: 腾讯财经 (Tencent)
-    - xueqiu: 雪球 (Xueqiu)
+    - eastmoney: 东方财富 (EastMoney) - Primary A-share data source
+    - sina: 新浪财经 (Sina Finance) - Backup A-share data
+    - tencent: 腾讯财经 (Tencent) - Backup A-share data
+    - xueqiu: 雪球 (Xueqiu) - Backup A-share data with social features
+    - netease163: 网易财经 (NetEase 163) - Additional backup for A-shares
+    - yahoo: Yahoo Finance - US stock data
+    - composite: Smart routing adapter (auto-selects best source)
     """
-    
+
     ADAPTERS = {
         'eastmoney': EastMoneyAdapter,
         'sina': SinaAdapter,
         'tencent': TencentAdapter,
         'xueqiu': XueqiuAdapter,
+        'netease163': NetEase163Adapter,
     }
     
     @classmethod

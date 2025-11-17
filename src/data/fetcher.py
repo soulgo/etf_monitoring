@@ -271,32 +271,56 @@ class DataFetcher:
     
     def _fetch_single_quote(self, code: str) -> Optional[ETFQuote]:
         """
-        Fetch quote for single ETF code with retry logic.
-        
+        Fetch quote for single ETF code with retry logic and request-level caching.
+
+        Implements:
+        - Request-level cache check (prevents duplicate API calls within TTL window)
+        - Exponential backoff retry logic
+        - Incremental update detection
+
         Args:
             code: ETF code
-            
+
         Returns:
             ETFQuote object or None if failed
         """
+        # Check request-level cache first
+        if not self._cache_manager.should_fetch(code):
+            cached_quote = self._cache_manager.get_request_cached(code)
+            if cached_quote:
+                self._logger.debug(f"[Request Cache] Using cached data for {code}")
+                return cached_quote
+
+        # Fetch with exponential backoff retry
         for attempt in range(self._retry_count + 1):
             try:
                 quote = self._current_adapter.fetch_quote(code)
-                
+
                 if quote:
                     # Success - reset failure tracking
                     if self._consecutive_failures > 0:
                         self._consecutive_failures = 0
-                    
+
                     # Try to switch back to higher priority adapter after 5 minutes
                     if self._current_adapter_index >= 0:
                         self._try_switch_to_higher_priority()
-                    
+
                     return quote
-                
-                # No data returned, will retry
+
+                # No data returned, will retry with exponential backoff
                 if attempt < self._retry_count:
-                    time.sleep(self._retry_interval)
+                    # Exponential backoff: base_interval * (2 ^ attempt) with jitter
+                    backoff_time = self._retry_interval * (2 ** attempt)
+                    # Add jitter (±20%) to prevent thundering herd
+                    import random
+                    jitter = backoff_time * 0.2 * (random.random() * 2 - 1)
+                    wait_time = backoff_time + jitter
+
+                    self._logger.debug(
+                        f"[Retry] {code} attempt {attempt + 1}/{self._retry_count}, "
+                        f"waiting {wait_time:.2f}s (exponential backoff)"
+                    )
+                    time.sleep(wait_time)
                     
             except Exception as e:
                 # 减少403错误的日志频率

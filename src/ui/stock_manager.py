@@ -9,17 +9,37 @@ from ..alerts.manager import AlertManager
 from ..data.cache import CacheManager
 from ..utils.helpers import Debouncer
 from .alert_popup import show_toast
+from .design_system import (
+    Colors, Typography, Spacing, ComponentStyles,
+    apply_button_style, get_status_color
+)
+from .modern_dialogs import ModernEditDialog, ModernAddDialog
 
 class StockManagerFrame(wx.Frame):
+    """
+    Modern Stock Manager UI with Material Design principles.
+
+    Features:
+    - Clean, modern interface with consistent spacing
+    - Color-coded status indicators
+    - Responsive layout
+    - Smooth interactions
+    - Professional typography
+    """
+
     def __init__(self, app):
-        super().__init__(None, title="股票管理", size=wx.Size(800, 600))
+        # Initialize with modern styling
+        super().__init__(
+            None,
+            title="ETF 股票管理",
+            size=wx.Size(1000, 700),
+            style=wx.DEFAULT_FRAME_STYLE
+        )
+
         # Use the main logger to ensure logs appear in the log file
         self._logger = get_logger("etf_monitor")
         self._logger.info("=" * 60)
-        self._logger.info("[股票管理窗口] 开始初始化")
-        self._logger.info(f"[股票管理窗口] Logger name: {self._logger.name}")
-        self._logger.info(f"[股票管理窗口] Logger level: {self._logger.level}")
-        self._logger.info(f"[股票管理窗口] Logger handlers: {len(self._logger.handlers)}")
+        self._logger.info("[股票管理窗口] 开始初始化 - Modern UI")
 
         self._app = app
         self._config = get_config()
@@ -35,26 +55,178 @@ class StockManagerFrame(wx.Frame):
         # Pause floating window guard to prevent focus stealing
         self._pause_floating_window_guard()
 
-        # Build UI
-        self._panel = wx.Panel(self)
-        vbox = wx.BoxSizer(wx.VERTICAL)
+        # Build modern UI
+        self._create_ui()
 
-        # Grid setup (no toolbar with Add button)
+        # Apply modern styling
+        self._apply_modern_styling()
+
+        # Bind events
+        self._bind()
+
+        # Initial grid refresh
+        self._logger.info("[股票管理窗口] 开始初始刷新表格")
+        self._refresh_grid()
+
+        # Bind close event to resume floating window guard
+        self.Bind(wx.EVT_CLOSE, self._on_close)
+
+        self._logger.info("[股票管理窗口] 初始化完成")
+        self._logger.info("=" * 60)
+
+    def _create_ui(self):
+        """Create simplified UI layout with grid only."""
+        # Main panel with modern background
+        self._panel = wx.Panel(self)
+        self._panel.SetBackgroundColour(Colors.BG_PRIMARY)
+
+        # Main vertical layout
+        main_sizer = wx.BoxSizer(wx.VERTICAL)
+
+        # Simple toolbar with just buttons
+        toolbar_sizer = self._create_simple_toolbar()
+        main_sizer.Add(toolbar_sizer, 0, wx.EXPAND | wx.ALL, Spacing.SM)
+
+        # Grid section (main content) - with minimal padding
+        self._create_grid()
+        main_sizer.Add(self._grid, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, Spacing.SM)
+
+        self._panel.SetSizer(main_sizer)
+
+    def _create_simple_toolbar(self) -> wx.BoxSizer:
+        """Create simple toolbar with help text and stats."""
+        toolbar_sizer = wx.BoxSizer(wx.HORIZONTAL)
+
+        # Help text (left-aligned)
+        help_text = wx.StaticText(
+            self._panel,
+            label="💡 提示：右键点击空白区域可快速添加股票"
+        )
+        help_text.SetFont(Typography.caption())
+        help_text.SetForegroundColour(Colors.TEXT_HINT)
+        toolbar_sizer.Add(help_text, 0, wx.ALIGN_CENTER_VERTICAL)
+
+        # Spacer - push stats to the right
+        toolbar_sizer.AddStretchSpacer(1)
+
+        # Stats label (right-aligned)
+        self._stats_label = wx.StaticText(self._panel, label="")
+        self._stats_label.SetFont(Typography.caption())
+        self._stats_label.SetForegroundColour(Colors.TEXT_SECONDARY)
+        toolbar_sizer.Add(self._stats_label, 0, wx.ALIGN_CENTER_VERTICAL)
+
+        return toolbar_sizer
+
+    def _create_header(self) -> wx.BoxSizer:
+        """Create header with title and description."""
+        header_sizer = wx.BoxSizer(wx.VERTICAL)
+
+        # Title
+        title = wx.StaticText(self._panel, label="股票管理")
+        title.SetFont(Typography.h1())
+        title.SetForegroundColour(Colors.TEXT_PRIMARY)
+        header_sizer.Add(title, 0, wx.BOTTOM, Spacing.SM)
+
+        # Description
+        desc = wx.StaticText(self._panel, label="管理您的 ETF 监控列表，设置价格提醒阈值")
+        desc.SetFont(Typography.body())
+        desc.SetForegroundColour(Colors.TEXT_SECONDARY)
+        header_sizer.Add(desc, 0)
+
+        return header_sizer
+
+    def _create_toolbar(self) -> wx.BoxSizer:
+        """Create toolbar with action buttons."""
+        toolbar_sizer = wx.BoxSizer(wx.HORIZONTAL)
+
+        # Add button (primary action)
+        self._add_btn = wx.Button(self._panel, label="+ 添加股票", size=wx.Size(120, 36))
+        apply_button_style(self._add_btn, ComponentStyles.button_primary())
+        self._add_btn.SetFont(Typography.body())
+        toolbar_sizer.Add(self._add_btn, 0, wx.RIGHT, Spacing.SM)
+
+        # Refresh button (secondary action)
+        self._refresh_btn = wx.Button(self._panel, label="🔄 刷新", size=wx.Size(100, 36))
+        apply_button_style(self._refresh_btn, ComponentStyles.button_secondary())
+        self._refresh_btn.SetFont(Typography.body())
+        toolbar_sizer.Add(self._refresh_btn, 0, wx.RIGHT, Spacing.SM)
+
+        # Spacer
+        toolbar_sizer.AddStretchSpacer(1)
+
+        # Stats label
+        self._stats_label = wx.StaticText(self._panel, label="")
+        self._stats_label.SetFont(Typography.caption())
+        self._stats_label.SetForegroundColour(Colors.TEXT_SECONDARY)
+        toolbar_sizer.Add(self._stats_label, 0, wx.ALIGN_CENTER_VERTICAL)
+
+        return toolbar_sizer
+
+    def _create_grid(self):
+        """Create modern styled grid."""
         self._grid = gridlib.Grid(self._panel)
         self._grid.CreateGrid(0, 8)
+
+        # Set column labels
         self._grid.SetColLabelValue(0, "代码")
         self._grid.SetColLabelValue(1, "名称")
         self._grid.SetColLabelValue(2, "当前价格")
-        self._grid.SetColLabelValue(3, "上涨阈值")
-        self._grid.SetColLabelValue(4, "下跌阈值")
-        self._grid.SetColLabelValue(5, "弹窗秒数")
+        self._grid.SetColLabelValue(3, "上涨阈值 (%)")
+        self._grid.SetColLabelValue(4, "下跌阈值 (%)")
+        self._grid.SetColLabelValue(5, "弹窗时长 (秒)")
         self._grid.SetColLabelValue(6, "编辑")
         self._grid.SetColLabelValue(7, "删除")
+
+        # Disable editing (use buttons instead)
         self._grid.EnableEditing(False)
-        self._grid.SetColSize(6, 80)
-        self._grid.SetColSize(7, 80)
-        vbox.Add(self._grid, 1, wx.EXPAND | wx.ALL, 5)
-        self._panel.SetSizer(vbox)
+
+        # Set column sizes
+        self._grid.SetColSize(0, 100)  # Code
+        self._grid.SetColSize(1, 150)  # Name
+        self._grid.SetColSize(2, 120)  # Price
+        self._grid.SetColSize(3, 120)  # Up threshold
+        self._grid.SetColSize(4, 120)  # Down threshold
+        self._grid.SetColSize(5, 120)  # Duration
+        self._grid.SetColSize(6, 80)   # Edit button
+        self._grid.SetColSize(7, 80)   # Delete button
+
+    def _create_footer(self) -> wx.BoxSizer:
+        """Create footer with additional info."""
+        footer_sizer = wx.BoxSizer(wx.HORIZONTAL)
+
+        # Help text
+        help_text = wx.StaticText(
+            self._panel,
+            label="💡 提示：右键点击空白区域可快速添加股票"
+        )
+        help_text.SetFont(Typography.caption())
+        help_text.SetForegroundColour(Colors.TEXT_HINT)
+        footer_sizer.Add(help_text, 0)
+
+        return footer_sizer
+
+    def _apply_modern_styling(self):
+        """Apply modern styling to grid and components."""
+        # Grid styling
+        grid_style = ComponentStyles.grid_header()
+
+        # Header styling
+        self._grid.SetLabelBackgroundColour(grid_style['bg_color'])
+        self._grid.SetLabelTextColour(grid_style['fg_color'])
+        self._grid.SetLabelFont(grid_style['font'])
+
+        # Cell styling
+        cell_style = ComponentStyles.grid_cell()
+        self._grid.SetDefaultCellBackgroundColour(cell_style['bg_color'])
+        self._grid.SetDefaultCellTextColour(cell_style['fg_color'])
+        self._grid.SetDefaultCellFont(cell_style['font'])
+
+        # Grid lines
+        self._grid.SetGridLineColour(Colors.BORDER_LIGHT)
+
+        # Selection colors
+        self._grid.SetSelectionBackground(Colors.PRIMARY_50)
+        self._grid.SetSelectionForeground(Colors.TEXT_PRIMARY)
 
         # Bind events
         self._bind()
@@ -70,32 +242,20 @@ class StockManagerFrame(wx.Frame):
         self._logger.info("=" * 60)
 
     def _bind(self):
-        print("=" * 80)
-        print("[DEBUG] _bind() 方法被调用")
+        """Bind all event handlers."""
         self._logger.info("[事件绑定] 开始绑定事件处理器")
 
+        # Grid events
         self._grid.Bind(gridlib.EVT_GRID_CELL_LEFT_CLICK, self._on_cell_click)
-        print("[DEBUG] 已绑定左键点击事件")
-        self._logger.info("[事件绑定] 已绑定左键点击事件")
-
         self._grid.Bind(gridlib.EVT_GRID_LABEL_LEFT_CLICK, self._on_label_click)
-        print("[DEBUG] 已绑定标签左键点击事件")
-        self._logger.info("[事件绑定] 已绑定标签左键点击事件")
-
         self._grid.Bind(gridlib.EVT_GRID_CELL_RIGHT_CLICK, self._on_grid_right_click)
-        print("[DEBUG] 已绑定单元格右键点击事件")
-        self._logger.info("[事件绑定] 已绑定单元格右键点击事件")
 
-        # Bind context menu to multiple targets for comprehensive coverage
-        # 1. Grid window for empty cells within the grid
+        # Context menu for empty areas
         grid_window = self._grid.GetGridWindow()
-        print(f"[DEBUG] grid_window = {grid_window}")
         if grid_window:
             grid_window.Bind(wx.EVT_CONTEXT_MENU, self._on_grid_context_menu)
-            print("[DEBUG] 已绑定网格窗口上下文菜单事件")
             self._logger.info("[事件绑定] 已绑定网格窗口上下文菜单事件")
         else:
-            print("[DEBUG] 警告：无法获取网格窗口")
             self._logger.warning("[事件绑定] 无法获取网格窗口")
 
         # 2. Panel for areas outside the grid
@@ -219,7 +379,7 @@ class StockManagerFrame(wx.Frame):
         return rows
 
     def _refresh_grid(self):
-        """Refresh grid display with current symbols data."""
+        """Refresh grid display with current symbols data and modern styling."""
         self._logger.info(f"[刷新表格] 开始刷新，当前有 {len(self._symbols)} 只股票")
 
         rows = self._get_filtered()
@@ -241,12 +401,16 @@ class StockManagerFrame(wx.Frame):
             code = s.get('symbol', '')
             name = s.get('name', '')
             price = ''
+            price_color = Colors.TEXT_PRIMARY
 
             # Try to get price from cache first
             if cache:
                 q = cache.get(code)
                 if q and q.price is not None:
                     price = f"{q.price:.3f}"
+                    # Color code based on change
+                    if hasattr(q, 'change_percent'):
+                        price_color = get_status_color(q.change_percent)
                     self._logger.debug(f"[刷新表格] 行{i} {code}: 从缓存获取价格 {price}")
                 else:
                     self._logger.info(f"[刷新表格] 行{i} {code}: 缓存中无价格数据，尝试从API获取")
@@ -275,13 +439,38 @@ class StockManagerFrame(wx.Frame):
             self._grid.SetCellValue(i, 3, str(s.get('up_threshold', '')))
             self._grid.SetCellValue(i, 4, str(s.get('down_threshold', '')))
             self._grid.SetCellValue(i, 5, str(s.get('duration_secs', '')))
-            self._grid.SetCellValue(i, 6, "编辑")
-            self._grid.SetCellValue(i, 7, "删除")
+            self._grid.SetCellValue(i, 6, "✏️ 编辑")
+            self._grid.SetCellValue(i, 7, "🗑️ 删除")
 
-            # Set cell colors
-            self._grid.SetCellBackgroundColour(i, 2, wx.Colour(240, 248, 255))
-            self._grid.SetCellBackgroundColour(i, 6, wx.Colour(173, 216, 230))
-            self._grid.SetCellBackgroundColour(i, 7, wx.Colour(255, 182, 193))
+            # Apply modern cell styling
+            # Code column - bold
+            self._grid.SetCellFont(i, 0, Typography.body())
+            self._grid.SetCellTextColour(i, 0, Colors.TEXT_PRIMARY)
+
+            # Name column
+            self._grid.SetCellTextColour(i, 1, Colors.TEXT_PRIMARY)
+
+            # Price column - color coded and highlighted
+            self._grid.SetCellBackgroundColour(i, 2, Colors.INFO_LIGHT)
+            self._grid.SetCellTextColour(i, 2, price_color)
+            self._grid.SetCellFont(i, 2, Typography.body())
+
+            # Threshold columns
+            self._grid.SetCellTextColour(i, 3, Colors.SUCCESS_DARK)
+            self._grid.SetCellTextColour(i, 4, Colors.ERROR_DARK)
+
+            # Duration column
+            self._grid.SetCellTextColour(i, 5, Colors.TEXT_SECONDARY)
+
+            # Edit button - primary color
+            self._grid.SetCellBackgroundColour(i, 6, Colors.PRIMARY_100)
+            self._grid.SetCellTextColour(i, 6, Colors.PRIMARY_700)
+            self._grid.SetCellAlignment(i, 6, wx.ALIGN_CENTER, wx.ALIGN_CENTER)
+
+            # Delete button - error color
+            self._grid.SetCellBackgroundColour(i, 7, Colors.ERROR_LIGHT)
+            self._grid.SetCellTextColour(i, 7, Colors.ERROR_DARK)
+            self._grid.SetCellAlignment(i, 7, wx.ALIGN_CENTER, wx.ALIGN_CENTER)
 
             # Set read-only cells
             self._grid.SetReadOnly(i, 0, True)
@@ -290,7 +479,24 @@ class StockManagerFrame(wx.Frame):
             self._grid.SetReadOnly(i, 6, True)
             self._grid.SetReadOnly(i, 7, True)
 
+        # Update stats label
+        self._update_stats_label()
+
         self._logger.info(f"[刷新表格] 表格刷新完成")
+
+    def _update_stats_label(self):
+        """Update the stats label with current information."""
+        total = len(self._symbols)
+        cache = getattr(self._app, 'cache_manager', None)
+
+        if cache:
+            stats = cache.get_cache_stats()
+            hit_rate = stats.get('hit_rate', 0)
+            self._stats_label.SetLabel(
+                f"总计: {total} 只股票 | 缓存命中率: {hit_rate:.1f}%"
+            )
+        else:
+            self._stats_label.SetLabel(f"总计: {total} 只股票")
 
 
 
@@ -514,32 +720,29 @@ class StockManagerFrame(wx.Frame):
         self._resume_floating_window_guard()
         self.Destroy()
 
-    def _on_add(self, event):
-        self._logger.info("[添加股票] 开始添加流程")
+    def _on_refresh_click(self, event):
+        """Handle refresh button click."""
+        self._logger.info("[刷新] 手动刷新表格")
+        self._refresh_grid()
+        show_toast(self, "✅ 刷新完成", duration=2000)
 
-        # Check debouncer
-        if not self._debouncer.allow("add", 300):
+    def _on_add(self, event):
+        self._logger.info("[添加股票] 按钮被点击，开始添加流程")
+
+        # Check debouncer - reduced to 500ms for better responsiveness
+        if not self._debouncer.allow("add", 500):
             self._logger.warning("[添加股票] 操作过于频繁，已被防抖器拦截")
             return
 
-        self._logger.info("[添加股票] 创建输入对话框")
+        self._logger.info("[添加股票] 通过防抖检查，创建现代输入对话框")
 
         # Pause floating window guard before showing dialog
-        # (This is safe to call even if already paused)
         self._logger.info("[添加股票] 暂停浮动窗口守护")
         self._pause_floating_window_guard()
 
         try:
-            # Create dialog with explicit parent and style
-            dlg = wx.TextEntryDialog(
-                self,
-                "请输入股票代码（如 512170）",
-                "添加股票",
-                style=wx.OK | wx.CANCEL | wx.CENTRE
-            )
-
-            # Center dialog on parent
-            dlg.CenterOnParent()
+            # Create modern dialog
+            dlg = ModernAddDialog(self)
 
             self._logger.info("[添加股票] 显示对话框")
             result = dlg.ShowModal()
@@ -547,7 +750,7 @@ class StockManagerFrame(wx.Frame):
 
             if result == wx.ID_OK:
                 self._logger.info("[添加股票] 用户点击确定")
-                code = dlg.GetValue().strip()
+                code = dlg.get_code()
                 dlg.Destroy()
 
                 self._logger.info(f"[添加股票] 获取到股票代码: {code}")
@@ -656,9 +859,13 @@ class StockManagerFrame(wx.Frame):
         # Handle Edit button click (column 6)
         if col == 6:
             self._on_edit_row(row)
+            # Don't skip event for button clicks to prevent duplicate triggers
+            return
         # Handle Delete button click (column 7)
         elif col == 7:
             self._on_delete_row(row)
+            # Don't skip event for button clicks to prevent duplicate triggers
+            return
         # Handle editable cells (columns 3, 4, 5)
         elif col in [3, 4, 5]:
             self._grid.EnableCellEditControl()
@@ -666,8 +873,10 @@ class StockManagerFrame(wx.Frame):
         event.Skip()
 
     def _on_edit_row(self, row):
+        """Handle edit row action with modern dialog."""
         if not self._debouncer.allow("edit", 300):
             return
+
         code = self._grid.GetCellValue(row, 0)
         s = next((x for x in self._symbols if x.get('symbol') == code), None)
         if not s:
@@ -678,67 +887,28 @@ class StockManagerFrame(wx.Frame):
         self._pause_floating_window_guard()
 
         try:
-            # Create a dialog for editing thresholds
-            dlg = wx.Dialog(self, title="编辑股票配置", size=(400, 250), style=wx.DEFAULT_DIALOG_STYLE)
-            dlg.CenterOnParent()
-
-            panel = wx.Panel(dlg)
-            vbox = wx.BoxSizer(wx.VERTICAL)
-
-            # Stock info
-            info_text = wx.StaticText(panel, label=f"股票: {s.get('name')} ({code})")
-            vbox.Add(info_text, 0, wx.ALL, 10)
-
-            # Up threshold
-            up_box = wx.BoxSizer(wx.HORIZONTAL)
-            up_box.Add(wx.StaticText(panel, label="上涨阈值(%):"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
-            up_ctrl = wx.TextCtrl(panel, value=str(s.get('up_threshold', 0.0)))
-            up_box.Add(up_ctrl, 1, wx.EXPAND)
-            vbox.Add(up_box, 0, wx.EXPAND | wx.ALL, 5)
-
-            # Down threshold
-            down_box = wx.BoxSizer(wx.HORIZONTAL)
-            down_box.Add(wx.StaticText(panel, label="下跌阈值(%):"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
-            down_ctrl = wx.TextCtrl(panel, value=str(s.get('down_threshold', 0.0)))
-            down_box.Add(down_ctrl, 1, wx.EXPAND)
-            vbox.Add(down_box, 0, wx.EXPAND | wx.ALL, 5)
-
-            # Duration
-            dur_box = wx.BoxSizer(wx.HORIZONTAL)
-            dur_box.Add(wx.StaticText(panel, label="弹窗秒数:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
-            dur_ctrl = wx.TextCtrl(panel, value=str(s.get('duration_secs', 5)))
-            dur_box.Add(dur_ctrl, 1, wx.EXPAND)
-            vbox.Add(dur_box, 0, wx.EXPAND | wx.ALL, 5)
-
-            # Buttons
-            btn_box = wx.BoxSizer(wx.HORIZONTAL)
-            ok_btn = wx.Button(panel, wx.ID_OK, "确定")
-            cancel_btn = wx.Button(panel, wx.ID_CANCEL, "取消")
-            btn_box.Add(ok_btn, 0, wx.ALL, 5)
-            btn_box.Add(cancel_btn, 0, wx.ALL, 5)
-            vbox.Add(btn_box, 0, wx.ALIGN_CENTER | wx.ALL, 10)
-
-            panel.SetSizer(vbox)
+            # Create modern edit dialog
+            dlg = ModernEditDialog(self, s)
 
             self._logger.info("[编辑股票] 显示对话框")
             result = dlg.ShowModal()
-            self._logger.info(f"[编辑股票] 对话框关闭，结果: {result}")
 
             if result == wx.ID_OK:
-                try:
-                    up_val = float(up_ctrl.GetValue())
-                    down_val = float(down_ctrl.GetValue())
-                    dur_val = int(dur_ctrl.GetValue())
+                # Get validated values
+                values = dlg.get_values()
 
-                    s['up_threshold'] = up_val
-                    s['down_threshold'] = down_val
-                    s['duration_secs'] = dur_val
-                    self._save_symbols()
-                    self._refresh_grid()
-                    self._info("修改成功")
-                    get_logger(__name__).info(f"edit {code}")
-                except ValueError:
-                    self._error("请输入有效的数值")
+                # Update symbol data
+                s['up_threshold'] = values['up_threshold']
+                s['down_threshold'] = values['down_threshold']
+                s['duration_secs'] = values['duration_secs']
+
+                self._logger.info(f"[编辑股票] 更新配置: {code} -> {values}")
+
+                # Save and refresh
+                self._save_symbols()
+                self._refresh_grid()
+
+                show_toast(self, "✅ 配置已保存", duration=2000)
 
             dlg.Destroy()
         except Exception as e:
@@ -750,13 +920,16 @@ class StockManagerFrame(wx.Frame):
             wx.CallLater(500, self._resume_floating_window_guard)
 
     def _on_delete_row(self, row):
-        """处理表格中的“删除”点击。
+        """处理表格中的"删除"点击。
 
         逻辑要求：
-        - 点击“是”后：删除内存中的股票、保存配置、更新数据抓取列表、刷新表格
-        - 点击“否”后：直接关闭对话框，不做任何修改
+        - 点击"是"后：删除内存中的股票、保存配置、更新数据抓取列表、刷新表格
+        - 点击"否"后：直接关闭对话框，不做任何修改
         """
-        if not self._debouncer.allow("delete", 300):
+        # Use a unique key for each delete operation to prevent race conditions
+        delete_key = f"delete_{row}"
+        if not self._debouncer.allow(delete_key, 1000):
+            self._logger.warning(f"[删除股票] 防抖拦截: 行 {row}")
             return
 
         code = self._grid.GetCellValue(row, 0)
@@ -771,6 +944,8 @@ class StockManagerFrame(wx.Frame):
             # 同步确认对话框，在主线程执行
             if not self._confirm(f"确认删除股票 {name} ({code})?"):
                 self._logger.info("[删除股票] 用户取消删除")
+                # Resume guard immediately if user cancels
+                wx.CallLater(100, self._resume_floating_window_guard)
                 return
 
             # 真正执行删除逻辑（同步执行即可，数据量很小）
