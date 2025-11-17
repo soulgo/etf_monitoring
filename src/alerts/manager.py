@@ -5,6 +5,7 @@ import wx
 from ..data.models import ETFQuote
 from ..ui.alert_popup import AlertPopup
 from ..utils.logger import get_logger
+from ..utils.helpers import is_call_auction_time
 
 class AlertManager:
     def __init__(self, config):
@@ -30,15 +31,37 @@ class AlertManager:
         """根据涨跌幅和用户设置的阈值触发弹窗告警。
 
         约定：
-        - 配置里的 up_threshold / down_threshold 统一按“百分比绝对值”存储，如 3.0 表示 3%
+        - 配置里的 up_threshold / down_threshold 统一按"百分比绝对值"存储，如 3.0 表示 3%
         - 上涨告警：当前涨跌幅 >= +up_threshold
         - 下跌告警：当前涨跌幅 <= -down_threshold
         这样无论用户在配置里填 3 还是 -3，都会按 3% 处理，更符合直觉。
+        
+        注意：
+        - 在集合竞价阶段（9:00-9:30, 14:57-15:00）不触发告警，因为数据可能不准确
+        - 价格为0或过小时不触发告警，避免数据异常导致的误报
         """
+        # 在集合竞价阶段不触发告警
+        if is_call_auction_time():
+            # 只在首次进入竞价阶段时记录一次日志，避免频繁输出
+            if not hasattr(self, '_in_auction_logged') or not self._in_auction_logged:
+                self._logger.info("[告警检查] 进入集合竞价/盘前准备阶段，暂停告警检查")
+                self._in_auction_logged = True
+            return
+        else:
+            # 离开竞价阶段时重置标志
+            if hasattr(self, '_in_auction_logged') and self._in_auction_logged:
+                self._logger.info("[告警检查] 离开集合竞价阶段，恢复告警检查")
+                self._in_auction_logged = False
+        
         now = time.time()
         for code, quote in quotes.items():
             rule = self._rules.get(code)
             if not rule:
+                continue
+
+            # 检查价格是否有效（避免价格为0或过小时触发告警）
+            if quote.price is None or quote.price < 0.01:
+                self._logger.debug(f"[告警检查] {code} 价格无效或为0 ({quote.price})，跳过告警检查")
                 continue
 
             cp = quote.change_percent

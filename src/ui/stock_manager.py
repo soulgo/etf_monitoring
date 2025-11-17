@@ -724,7 +724,7 @@ class StockManagerFrame(wx.Frame):
         """Handle refresh button click."""
         self._logger.info("[刷新] 手动刷新表格")
         self._refresh_grid()
-        show_toast(self, "✅ 刷新完成", duration=2000)
+        show_toast("✅ 刷新完成", "success", 2000)
 
     def _on_add(self, event):
         self._logger.info("[添加股票] 按钮被点击，开始添加流程")
@@ -908,7 +908,7 @@ class StockManagerFrame(wx.Frame):
                 self._save_symbols()
                 self._refresh_grid()
 
-                show_toast(self, "✅ 配置已保存", duration=2000)
+                show_toast("✅ 配置已保存", "success", 2000)
 
             dlg.Destroy()
         except Exception as e:

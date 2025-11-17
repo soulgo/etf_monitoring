@@ -26,7 +26,7 @@ class ModernEditDialog(wx.Dialog):
         super().__init__(
             parent,
             title="编辑股票配置",
-            size=(500, 400),
+            size=(500, 520),
             style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER
         )
         
@@ -39,36 +39,39 @@ class ModernEditDialog(wx.Dialog):
         # Create UI
         self._create_ui()
         
+        # Set minimum size to ensure all fields are visible
+        self.SetMinSize((500, 520))
+        
         # Center on parent
         self.CenterOnParent()
     
     def _create_ui(self):
         """Create modern dialog UI."""
-        panel = wx.Panel(self)
-        panel.SetBackgroundColour(Colors.BG_PRIMARY)
+        self.panel = wx.Panel(self)
+        self.panel.SetBackgroundColour(Colors.BG_PRIMARY)
         
         main_sizer = wx.BoxSizer(wx.VERTICAL)
         
         # Header section
-        header_sizer = self._create_header()
+        header_sizer = self._create_header(self.panel)
         main_sizer.Add(header_sizer, 0, wx.EXPAND | wx.ALL, Spacing.LG)
         
         # Form section
-        form_sizer = self._create_form()
+        form_sizer = self._create_form(self.panel)
         main_sizer.Add(form_sizer, 1, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, Spacing.LG)
         
         # Button section
-        button_sizer = self._create_buttons()
+        button_sizer = self._create_buttons(self.panel)
         main_sizer.Add(button_sizer, 0, wx.EXPAND | wx.ALL, Spacing.LG)
         
-        panel.SetSizer(main_sizer)
+        self.panel.SetSizer(main_sizer)
     
-    def _create_header(self) -> wx.BoxSizer:
+    def _create_header(self, parent) -> wx.BoxSizer:
         """Create dialog header."""
         header_sizer = wx.BoxSizer(wx.VERTICAL)
         
         # Title
-        title = wx.StaticText(self, label="编辑股票配置")
+        title = wx.StaticText(parent, label="编辑股票配置")
         title.SetFont(Typography.h2())
         title.SetForegroundColour(Colors.TEXT_PRIMARY)
         header_sizer.Add(title, 0, wx.BOTTOM, Spacing.SM)
@@ -76,19 +79,20 @@ class ModernEditDialog(wx.Dialog):
         # Stock info
         code = self.stock_data.get('symbol', '')
         name = self.stock_data.get('name', '')
-        info = wx.StaticText(self, label=f"{name} ({code})")
+        info = wx.StaticText(parent, label=f"{name} ({code})")
         info.SetFont(Typography.body())
         info.SetForegroundColour(Colors.TEXT_SECONDARY)
         header_sizer.Add(info, 0)
         
         return header_sizer
     
-    def _create_form(self) -> wx.BoxSizer:
+    def _create_form(self, parent) -> wx.BoxSizer:
         """Create form with validation."""
         form_sizer = wx.BoxSizer(wx.VERTICAL)
         
         # Up threshold field
         up_sizer, self.up_ctrl, self.up_error = self._create_field(
+            parent,
             "上涨阈值 (%)",
             str(self.stock_data.get('up_threshold', 0.0)),
             "当价格上涨超过此百分比时触发提醒"
@@ -97,6 +101,7 @@ class ModernEditDialog(wx.Dialog):
         
         # Down threshold field
         down_sizer, self.down_ctrl, self.down_error = self._create_field(
+            parent,
             "下跌阈值 (%)",
             str(self.stock_data.get('down_threshold', 0.0)),
             "当价格下跌超过此百分比时触发提醒"
@@ -105,6 +110,7 @@ class ModernEditDialog(wx.Dialog):
         
         # Duration field
         dur_sizer, self.dur_ctrl, self.dur_error = self._create_field(
+            parent,
             "弹窗时长 (秒)",
             str(self.stock_data.get('duration_secs', 5)),
             "提醒弹窗显示的时长"
@@ -118,30 +124,30 @@ class ModernEditDialog(wx.Dialog):
         
         return form_sizer
     
-    def _create_field(self, label: str, value: str, hint: str) -> tuple:
+    def _create_field(self, parent, label: str, value: str, hint: str) -> tuple:
         """Create a form field with label, input, and error message."""
         field_sizer = wx.BoxSizer(wx.VERTICAL)
         
         # Label
-        label_text = wx.StaticText(self, label=label)
+        label_text = wx.StaticText(parent, label=label)
         label_text.SetFont(Typography.body())
         label_text.SetForegroundColour(Colors.TEXT_PRIMARY)
         field_sizer.Add(label_text, 0, wx.BOTTOM, Spacing.XS)
         
         # Input
-        input_ctrl = wx.TextCtrl(self, value=value, size=(-1, 36))
+        input_ctrl = wx.TextCtrl(parent, value=value, size=(-1, 36))
         input_style = ComponentStyles.input_field()
         apply_text_style(input_ctrl, input_style)
         field_sizer.Add(input_ctrl, 0, wx.EXPAND | wx.BOTTOM, Spacing.XS)
         
         # Hint text
-        hint_text = wx.StaticText(self, label=hint)
+        hint_text = wx.StaticText(parent, label=hint)
         hint_text.SetFont(Typography.caption())
         hint_text.SetForegroundColour(Colors.TEXT_HINT)
         field_sizer.Add(hint_text, 0, wx.BOTTOM, Spacing.XS)
         
         # Error message (initially hidden)
-        error_text = wx.StaticText(self, label="")
+        error_text = wx.StaticText(parent, label="")
         error_text.SetFont(Typography.caption())
         error_text.SetForegroundColour(Colors.ERROR)
         error_text.Hide()
@@ -149,7 +155,7 @@ class ModernEditDialog(wx.Dialog):
         
         return field_sizer, input_ctrl, error_text
 
-    def _create_buttons(self) -> wx.BoxSizer:
+    def _create_buttons(self, parent) -> wx.BoxSizer:
         """Create dialog buttons."""
         button_sizer = wx.BoxSizer(wx.HORIZONTAL)
 
@@ -157,12 +163,12 @@ class ModernEditDialog(wx.Dialog):
         button_sizer.AddStretchSpacer(1)
 
         # Cancel button
-        self.cancel_btn = wx.Button(self, wx.ID_CANCEL, "取消", size=(100, 36))
+        self.cancel_btn = wx.Button(parent, wx.ID_CANCEL, "取消", size=(100, 36))
         apply_button_style(self.cancel_btn, ComponentStyles.button_secondary())
         button_sizer.Add(self.cancel_btn, 0, wx.RIGHT, Spacing.SM)
 
         # OK button
-        self.ok_btn = wx.Button(self, wx.ID_OK, "保存", size=(100, 36))
+        self.ok_btn = wx.Button(parent, wx.ID_OK, "保存", size=(100, 36))
         apply_button_style(self.ok_btn, ComponentStyles.button_primary())
         button_sizer.Add(self.ok_btn, 0)
 

@@ -214,6 +214,41 @@ def is_trading_time() -> bool:
             afternoon_start <= current_time <= afternoon_end)
 
 
+def is_call_auction_time() -> bool:
+    """
+    检测当前是否在集合竞价或盘前准备阶段
+    
+    包括时间段：
+    - 盘前准备及集合竞价：09:00-09:30（数据可能不稳定或为0）
+    - 收盘集合竞价：14:57-15:00
+    
+    在这些阶段，数据可能不准确或为0，不应该触发告警
+    
+    Returns:
+        True if in call auction or pre-market period
+    """
+    from datetime import datetime, time
+    
+    now = datetime.now()
+    
+    # 检查是否周末
+    if now.weekday() >= 5:
+        return False
+    
+    current_time = now.time()
+    
+    # 盘前准备及集合竞价：09:00-09:30（扩大范围，避免数据不稳定期触发告警）
+    morning_prepare_start = time(9, 0)
+    morning_auction_end = time(9, 30)
+    
+    # 收盘集合竞价：14:57-15:00
+    closing_auction_start = time(14, 57)
+    closing_auction_end = time(15, 0)
+    
+    return (morning_prepare_start <= current_time <= morning_auction_end or
+            closing_auction_start <= current_time <= closing_auction_end)
+
+
 def get_next_trading_time() -> str:
     """
     获取下一个交易时间段的描述

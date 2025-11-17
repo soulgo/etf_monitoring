@@ -7,7 +7,7 @@ wxPython>=4.2.0
 # HTTP Client - Modern async/sync support with connection pooling
 httpx>=0.24.0
 
-PyYAML>=6.0
+# Optional: PyYAML>=6.0 (only needed if using .yaml config files, currently using .json)
 
 # No additional dependencies needed - using Python standard library for:
 # - threading: Multi-threaded data fetching and rotation control
